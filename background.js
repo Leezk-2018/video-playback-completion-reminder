@@ -15,7 +15,8 @@ const DEFAULT_REMINDER_SETTINGS = Object.freeze({
   qqMail: Object.freeze({
     recipient: "",
     bridgeToken: ""
-  })
+  }),
+  pauseReminder: true
 });
 
 function tabSessionKey(tabId) {
@@ -53,7 +54,8 @@ function normalizeQqMailSettings(value) {
 function normalizeReminderSettings(value) {
   return {
     mode: REMINDER_MODES.has(value?.mode) ? value.mode : DEFAULT_REMINDER_SETTINGS.mode,
-    qqMail: normalizeQqMailSettings(value?.qqMail)
+    qqMail: normalizeQqMailSettings(value?.qqMail),
+    pauseReminder: value?.pauseReminder !== false
   };
 }
 
@@ -71,12 +73,18 @@ function withReminderMetadata(settings) {
 
 async function getTabSettings(tabId) {
   if (!Number.isInteger(tabId)) {
-    return { ...DEFAULT_TAB_SETTINGS };
+    return { ...DEFAULT_TAB_SETTINGS, pauseReminder: true };
   }
 
   const key = tabSessionKey(tabId);
-  const savedState = await chrome.storage.session.get(key);
-  return normalizeTabSettings(savedState[key]);
+  const [savedState, reminderSettings] = await Promise.all([
+    chrome.storage.session.get(key),
+    getReminderSettings()
+  ]);
+  return {
+    ...normalizeTabSettings(savedState[key]),
+    pauseReminder: reminderSettings.pauseReminder
+  };
 }
 
 async function saveTabSettings(tabId, settings) {
@@ -110,7 +118,8 @@ async function saveReminderSettings(changes) {
   const current = await getReminderSettings();
   const next = normalizeReminderSettings({
     mode: changes?.mode ?? current.mode,
-    qqMail: { ...current.qqMail, ...changes?.qqMail }
+    qqMail: { ...current.qqMail, ...changes?.qqMail },
+    pauseReminder: changes?.pauseReminder ?? current.pauseReminder
   });
   await chrome.storage.local.set({ [REMINDER_SETTINGS_KEY]: next });
   return withReminderMetadata(next);
@@ -271,6 +280,78 @@ async function sendCompletionReminders(tabId, pageTitle) {
   await Promise.allSettled(actions);
 }
 
+const lastPauseAlertTime = new Map();
+const PAUSE_ALERT_COOLDOWN_MS = 60_000;
+
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) {
+    return "";
+  }
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}分${s < 10 ? "0" : ""}${s}秒`;
+}
+
+async function showPauseNotification(tabId) {
+  const notificationId = `video-paused-${tabId}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+
+  await chrome.notifications.create(notificationId, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
+    title: "⚠️ 视频播放异常暂停",
+    message: "检测到视频已暂停超过 20 秒（疑似防挂机弹窗），请及时处理。",
+    priority: 2
+  });
+}
+
+async function sendQqMailPauseReminder(tabId, pageTitle, currentTime, duration) {
+  const tab = await chrome.tabs.get(tabId);
+  const pausedAt = new Date().toLocaleString("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "medium"
+  });
+  const title = tab.title || pageTitle || "当前网页";
+  const pageUrl = tab.url || "";
+
+  let progressInfo = "";
+  if (duration > 0) {
+    progressInfo = `\n播放进度：${formatDuration(currentTime)} / ${formatDuration(duration)}`;
+  }
+
+  await requestQqMailDelivery({
+    subject: "⚠️【提醒】视频播放异常暂停",
+    text: `检测到当前视频已暂停播放超过 20 秒，可能出现防挂机验证弹窗或播放中断，请及时处理。${progressInfo}\n\n页面：${title}\n链接：${pageUrl}\n暂停时间：${pausedAt}`
+  });
+}
+
+async function sendPauseReminders(tabId, pageTitle, currentTime, duration) {
+  const tabSettings = await getTabSettings(tabId);
+  if (!tabSettings.enabled || tabSettings.pauseReminder === false) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastTime = lastPauseAlertTime.get(tabId) || 0;
+  if (now - lastTime < PAUSE_ALERT_COOLDOWN_MS) {
+    return;
+  }
+  lastPauseAlertTime.set(tabId, now);
+
+  const reminderSettings = await getReminderSettings();
+  const actions = [];
+
+  if (reminderSettings.mode === "system" || reminderSettings.mode === "both") {
+    actions.push(showPauseNotification(tabId));
+  }
+  if (reminderSettings.mode === "qqmail" || reminderSettings.mode === "both") {
+    actions.push(sendQqMailPauseReminder(tabId, pageTitle, currentTime, duration));
+  }
+
+  await Promise.allSettled(actions);
+}
+
 function respond(promise, sendResponse) {
   promise.then(sendResponse).catch((error) => {
     sendResponse({
@@ -315,7 +396,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "SAVE_REMINDER_SETTINGS") {
     return respond(
-      saveReminderSettings({ mode: message.mode, qqMail: message.qqMail }),
+      saveReminderSettings({
+        mode: message.mode,
+        qqMail: message.qqMail,
+        pauseReminder: message.pauseReminder
+      }),
       sendResponse
     );
   }
@@ -325,14 +410,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "VIDEO_ENDED" && sender.tab?.id !== undefined) {
+    lastPauseAlertTime.delete(sender.tab.id);
     sendCompletionReminders(sender.tab.id, message.pageTitle).catch(() => {
       // A delivery failure must not disrupt page-side video monitoring.
     });
+  }
+
+  if (message.type === "VIDEO_PAUSED" && sender.tab?.id !== undefined) {
+    sendPauseReminders(
+      sender.tab.id,
+      message.pageTitle,
+      message.currentTime,
+      message.duration
+    ).catch(() => {});
   }
 });
 
 function clearSettingsForTopFrame(details) {
   if (details.frameId === 0) {
+    lastPauseAlertTime.delete(details.tabId);
     clearTabSettings(details.tabId).catch(() => {});
   }
 }
@@ -343,5 +439,6 @@ chrome.webNavigation.onCommitted.addListener(clearSettingsForTopFrame);
 chrome.webNavigation.onHistoryStateUpdated.addListener(clearSettingsForTopFrame);
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  lastPauseAlertTime.delete(tabId);
   clearTabSettings(tabId).catch(() => {});
 });
