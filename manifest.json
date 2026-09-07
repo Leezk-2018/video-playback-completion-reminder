@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "视频播放完成提醒",
+  "name": "视频完播提醒",
   "description": "监测网页视频播放，控制播放倍速，并在结束时发送系统或 QQ 邮箱提醒。",
   "version": "1.2.0",
   "permissions": [
@@ -20,7 +20,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "视频播放完成提醒",
+    "default_title": "视频完播提醒",
     "default_popup": "popup/popup.html"
   },
   "icons": {
