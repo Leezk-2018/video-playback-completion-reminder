@@ -8,63 +8,140 @@
   </head>
   <body>
     <main class="popup">
-      <header class="heading">
-        <img class="logo" src="../icons/icon.svg" alt="" />
-        <div>
-          <h1>视频播放完成提醒</h1>
-          <p>当前标签页</p>
+      <!-- 顶部标题栏 -->
+      <header class="header">
+        <div class="header-brand">
+          <img class="logo" src="../icons/icon.svg" alt="Logo" />
+          <div>
+            <h1 class="app-title">视频播放完成提醒</h1>
+            <p class="app-subtitle">自动化挂机与状态监控</p>
+          </div>
         </div>
+        <span id="header-badge" class="header-badge">未开始</span>
       </header>
 
-      <section class="status" aria-live="polite">
-        <span id="status-dot" class="status-dot" aria-hidden="true"></span>
-        <p id="status-text">正在检查页面状态...</p>
+      <!-- 状态指示卡片 -->
+      <section id="status-card" class="status-card" aria-live="polite">
+        <div class="status-indicator">
+          <span id="status-dot" class="status-dot" aria-hidden="true"></span>
+        </div>
+        <div class="status-info">
+          <div id="status-text" class="status-title">正在检查页面状态...</div>
+          <div id="detail-text" class="status-detail">请在包含视频的网页中使用</div>
+        </div>
       </section>
 
-      <section class="control-section" aria-labelledby="playback-rate-label">
-        <label id="playback-rate-label" for="playback-rate">播放倍速</label>
-        <select id="playback-rate" disabled>
-          <option value="0.5">0.5x</option>
-          <option value="0.75">0.75x</option>
-          <option value="1">1x</option>
-          <option value="1.25">1.25x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-        </select>
+      <!-- 快捷倍速面板 -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polygon points="10 8 16 12 10 16 10 8"></polygon>
+            </svg>
+            <span>播放倍速</span>
+          </div>
+          <!-- 原生 select 保持同步并隐藏 -->
+          <select id="playback-rate" class="sr-only" disabled>
+            <option value="1">1x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="1.75">1.75x</option>
+            <option value="2">2x</option>
+            <option value="2.5">2.5x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+          </select>
+        </div>
+        <div class="rate-chips" id="rate-chips">
+          <button type="button" class="rate-chip active" data-rate="1">1.0x</button>
+          <button type="button" class="rate-chip" data-rate="1.25">1.25x</button>
+          <button type="button" class="rate-chip" data-rate="1.5">1.5x</button>
+          <button type="button" class="rate-chip" data-rate="1.75">1.75x</button>
+          <button type="button" class="rate-chip" data-rate="2">2.0x</button>
+          <button type="button" class="rate-chip" data-rate="2.5">2.5x</button>
+          <button type="button" class="rate-chip" data-rate="3">3.0x</button>
+          <button type="button" class="rate-chip" data-rate="4">4.0x</button>
+        </div>
       </section>
 
-      <section class="control-section" aria-labelledby="reminder-mode-label">
-        <label id="reminder-mode-label" for="reminder-mode">提醒类型</label>
-        <select id="reminder-mode">
-          <option value="system">系统通知</option>
-          <option value="qqmail">QQ 邮箱提醒</option>
-          <option value="both">系统通知 + QQ 邮箱</option>
-        </select>
+      <!-- 提醒偏好设置卡片 -->
+      <section class="card">
+        <div class="card-row">
+          <div class="card-title">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+            </svg>
+            <label for="reminder-mode">提醒方式</label>
+          </div>
+          <div class="select-wrapper">
+            <select id="reminder-mode">
+              <option value="system">系统桌面通知</option>
+              <option value="qqmail">QQ 邮箱邮件</option>
+              <option value="both">桌面通知 + QQ 邮箱</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card-divider"></div>
+
+        <!-- 防挂机 / 异常暂停检测 (iOS 风格开关) -->
+        <div class="card-row switch-row">
+          <div class="switch-meta">
+            <div class="card-title">
+              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+              <span>防挂机 / 异常暂停检测</span>
+            </div>
+            <p class="switch-subtext">视频暂停超过 20 秒提醒，防网课中断</p>
+          </div>
+          <label class="switch" title="开启后，视频暂停超过 20 秒未恢复将发出提醒">
+            <input id="pause-reminder-toggle" type="checkbox" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
       </section>
 
-      <section id="qq-mail-settings" class="email-settings" hidden>
-        <p class="setup-hint">先运行项目里的 <code>start-qq-mail-bridge.ps1</code>，再把它显示的密钥粘贴到这里。</p>
-        <label for="qq-recipient">收件人 QQ 邮箱</label>
-        <input id="qq-recipient" type="email" autocomplete="email" placeholder="123456@qq.com" />
+      <!-- QQ 邮箱配置面板 -->
+      <section id="qq-mail-settings" class="card email-card" hidden>
+        <div class="email-header">
+          <div class="card-title">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+              <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+            </svg>
+            <span>QQ 邮箱服务配置</span>
+          </div>
+        </div>
+        <p class="setup-hint">
+          请先运行本机的 <code>start-qq-mail-bridge.ps1</code>，然后将显示的密钥粘贴到下方：
+        </p>
 
-        <label for="bridge-token">桥接服务连接密钥</label>
-        <input id="bridge-token" type="password" autocomplete="off" placeholder="从 PowerShell 窗口复制" />
+        <div class="form-group">
+          <label for="qq-recipient">收件人 QQ 邮箱</label>
+          <input id="qq-recipient" type="email" autocomplete="email" placeholder="例如：123456@qq.com" />
+        </div>
+
+        <div class="form-group">
+          <label for="bridge-token">桥接服务连接密钥</label>
+          <input id="bridge-token" type="password" autocomplete="off" placeholder="从 PowerShell 窗口复制" />
+        </div>
 
         <div class="email-actions">
-          <button id="save-qq-mail-settings" class="secondary-button" type="button">
-            保存设置
-          </button>
-          <button id="test-qq-mail" class="secondary-button" type="button">
-            发送测试邮件
-          </button>
+          <button id="save-qq-mail-settings" class="btn-secondary" type="button">保存设置</button>
+          <button id="test-qq-mail" class="btn-secondary" type="button">发送测试邮件</button>
         </div>
         <p id="qq-mail-status" class="field-status" aria-live="polite"></p>
       </section>
 
-      <button id="toggle-button" class="toggle-button" type="button" disabled>
-        开始监测
-      </button>
-      <p id="detail-text" class="detail">视频结束后将发送系统通知。</p>
+      <!-- 底部主操作按钮 -->
+      <footer class="action-footer">
+        <button id="toggle-button" class="toggle-button" type="button" disabled>
+          开始监测
+        </button>
+      </footer>
     </main>
 
     <script src="popup.js"></script>

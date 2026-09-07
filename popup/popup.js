@@ -1,9 +1,13 @@
+const statusCard = document.querySelector("#status-card");
 const statusDot = document.querySelector("#status-dot");
 const statusText = document.querySelector("#status-text");
-const toggleButton = document.querySelector("#toggle-button");
 const detailText = document.querySelector("#detail-text");
+const headerBadge = document.querySelector("#header-badge");
+const toggleButton = document.querySelector("#toggle-button");
 const playbackRateSelect = document.querySelector("#playback-rate");
+const rateChips = document.querySelectorAll(".rate-chip");
 const reminderModeSelect = document.querySelector("#reminder-mode");
+const pauseReminderToggle = document.querySelector("#pause-reminder-toggle");
 const qqMailSettings = document.querySelector("#qq-mail-settings");
 const qqRecipientInput = document.querySelector("#qq-recipient");
 const bridgeTokenInput = document.querySelector("#bridge-token");
@@ -17,7 +21,8 @@ const DEFAULT_REMINDER_SETTINGS = {
     recipient: "",
     bridgeToken: ""
   },
-  qqMailConfigured: false
+  qqMailConfigured: false,
+  pauseReminder: true
 };
 
 let currentTabId = null;
@@ -41,8 +46,18 @@ function isQqMailbox(value) {
 
 function setQqMailBusy(isBusy) {
   reminderModeSelect.disabled = isBusy;
+  pauseReminderToggle.disabled = isBusy;
   saveQqMailSettingsButton.disabled = isBusy;
   testQqMailButton.disabled = isBusy;
+}
+
+function updateRateChips(currentRate, supported) {
+  const normalizedRate = Number(currentRate || 1);
+  rateChips.forEach((chip) => {
+    const chipRate = Number(chip.dataset.rate);
+    chip.classList.toggle("active", chipRate === normalizedRate);
+    chip.disabled = !supported;
+  });
 }
 
 function renderReminderSettings(settings, message) {
@@ -53,48 +68,74 @@ function renderReminderSettings(settings, message) {
   };
 
   reminderModeSelect.value = currentReminderSettings.mode;
+  pauseReminderToggle.checked = currentReminderSettings.pauseReminder !== false;
   qqRecipientInput.value = currentReminderSettings.qqMail.recipient;
   bridgeTokenInput.value = currentReminderSettings.qqMail.bridgeToken;
   qqMailSettings.hidden = !modeUsesQqMail(currentReminderSettings.mode);
 
   if (!modeUsesQqMail(currentReminderSettings.mode)) {
     qqMailStatus.textContent = "";
+    qqMailStatus.style.color = "";
   } else if (message) {
     qqMailStatus.textContent = message;
+    qqMailStatus.style.color = "";
   } else if (currentReminderSettings.qqMailConfigured) {
-    qqMailStatus.textContent = "QQ 邮箱设置已保存。";
+    qqMailStatus.textContent = "✓ QQ 邮箱已配置完成，随时可发信。";
+    qqMailStatus.style.color = "#059669";
   } else {
     qqMailStatus.textContent = "请填写 QQ 邮箱和连接密钥。";
+    qqMailStatus.style.color = "#d97706";
   }
 }
 
 function setStatus(status, detail) {
   currentStatus = { ...currentStatus, ...status };
-  statusDot.classList.toggle("active", currentStatus.enabled);
-  statusDot.classList.toggle("unsupported", !currentStatus.supported);
-  playbackRateSelect.value = String(currentStatus.playbackRate || 1);
-  playbackRateSelect.disabled = !currentStatus.supported;
+
+  const isSupported = Boolean(currentStatus.supported);
+  const isEnabled = Boolean(currentStatus.enabled);
+  const currentRate = Number(currentStatus.playbackRate || 1);
+
+  statusDot.classList.toggle("active", isEnabled);
+  statusDot.classList.toggle("unsupported", !isSupported);
+  statusCard.classList.toggle("active", isEnabled);
+  statusCard.classList.toggle("unsupported", !isSupported);
+
+  playbackRateSelect.value = String(currentRate);
+  playbackRateSelect.disabled = !isSupported;
+  updateRateChips(currentRate, isSupported);
 
   if (status.reminderSettings) {
     renderReminderSettings(status.reminderSettings);
   }
 
-  if (!currentStatus.supported) {
+  if (!isSupported) {
+    headerBadge.textContent = "不可用";
+    headerBadge.className = "header-badge unsupported";
     statusText.textContent = "此页面不支持控制";
-    detailText.textContent = detail || "请在普通网页中打开扩展。";
+    detailText.textContent = detail || "请在包含 HTML5 视频的普通网页中打开。";
     toggleButton.textContent = "无法监测";
     toggleButton.disabled = true;
     toggleButton.classList.remove("stop");
     return;
   }
 
-  statusText.textContent = currentStatus.enabled
-    ? "正在监测此页面的视频"
-    : "尚未开始监测";
-  detailText.textContent = detail || "视频结束后将按所选方式提醒。";
-  toggleButton.textContent = currentStatus.enabled ? "停止监测" : "开始监测";
-  toggleButton.disabled = false;
-  toggleButton.classList.toggle("stop", currentStatus.enabled);
+  if (isEnabled) {
+    headerBadge.textContent = "监测中";
+    headerBadge.className = "header-badge active";
+    statusText.textContent = "正在监测此页面的视频";
+    detailText.textContent = detail || "视频结束或异常暂停时将发送提醒。";
+    toggleButton.textContent = "停止监测";
+    toggleButton.disabled = false;
+    toggleButton.classList.add("stop");
+  } else {
+    headerBadge.textContent = "待命";
+    headerBadge.className = "header-badge";
+    statusText.textContent = "尚未开始监测";
+    detailText.textContent = detail || "点击下方按钮开始监测播放状态。";
+    toggleButton.textContent = "开始监测";
+    toggleButton.disabled = false;
+    toggleButton.classList.remove("stop");
+  }
 }
 
 async function getCurrentTab() {
@@ -125,10 +166,12 @@ async function loadStatus() {
 async function saveReminderSettings(validateQqMailSettings) {
   const mode = reminderModeSelect.value;
   const qqMail = getQqMailSettingsFromForm();
+  const pauseReminder = pauseReminderToggle.checked;
 
   if (validateQqMailSettings && modeUsesQqMail(mode)) {
     if (!isQqMailbox(qqMail.recipient) || !qqMail.bridgeToken) {
       qqMailStatus.textContent = "请填写有效的 QQ 邮箱和连接密钥。";
+      qqMailStatus.style.color = "#dc2626";
       return false;
     }
   }
@@ -138,7 +181,8 @@ async function saveReminderSettings(validateQqMailSettings) {
     const settings = await chrome.runtime.sendMessage({
       type: "SAVE_REMINDER_SETTINGS",
       mode,
-      qqMail
+      qqMail,
+      pauseReminder
     });
 
     if (!settings || settings.success === false) {
@@ -148,6 +192,7 @@ async function saveReminderSettings(validateQqMailSettings) {
     return true;
   } catch (error) {
     qqMailStatus.textContent = error instanceof Error ? error.message : "保存失败，请重试。";
+    qqMailStatus.style.color = "#dc2626";
     return false;
   } finally {
     setQqMailBusy(false);
@@ -174,11 +219,12 @@ toggleButton.addEventListener("click", async () => {
   }
 });
 
-playbackRateSelect.addEventListener("change", async () => {
+async function applyPlaybackRate(rate) {
   if (currentTabId === null || !currentStatus.supported) {
     return;
   }
 
+  rateChips.forEach((chip) => (chip.disabled = true));
   playbackRateSelect.disabled = true;
   detailText.textContent = "正在设置播放倍速...";
 
@@ -186,16 +232,40 @@ playbackRateSelect.addEventListener("change", async () => {
     const status = await chrome.runtime.sendMessage({
       type: "SET_PLAYBACK_RATE",
       tabId: currentTabId,
-      playbackRate: Number(playbackRateSelect.value)
+      playbackRate: rate
     });
     setStatus(status || currentStatus, status?.error);
   } catch {
     setStatus(currentStatus, "设置播放倍速失败，请重试。");
   }
+}
+
+playbackRateSelect.addEventListener("change", () => {
+  applyPlaybackRate(Number(playbackRateSelect.value));
+});
+
+rateChips.forEach((chip) => {
+  chip.addEventListener("click", () => {
+    if (chip.disabled) return;
+    const rate = Number(chip.dataset.rate);
+    playbackRateSelect.value = String(rate);
+    applyPlaybackRate(rate);
+  });
 });
 
 reminderModeSelect.addEventListener("change", () => {
+  qqMailSettings.hidden = !modeUsesQqMail(reminderModeSelect.value);
   saveReminderSettings(false);
+});
+
+pauseReminderToggle.addEventListener("change", async () => {
+  await saveReminderSettings(false);
+  if (currentTabId !== null && currentStatus.supported && currentStatus.enabled) {
+    chrome.scripting.executeScript({
+      target: { tabId: currentTabId, allFrames: true },
+      files: ["content.js"]
+    }).catch(() => {});
+  }
 });
 
 saveQqMailSettingsButton.addEventListener("click", () => {
@@ -209,14 +279,17 @@ testQqMailButton.addEventListener("click", async () => {
 
   setQqMailBusy(true);
   qqMailStatus.textContent = "正在发送测试邮件...";
+  qqMailStatus.style.color = "#0f766e";
   try {
     const result = await chrome.runtime.sendMessage({ type: "SEND_TEST_QQ_MAIL" });
     if (!result?.success) {
       throw new Error(result?.error || "测试邮件发送失败。");
     }
-    qqMailStatus.textContent = "测试邮件已发送，请查看 QQ 邮箱。";
+    qqMailStatus.textContent = "✓ 测试邮件已发送，请查看 QQ 邮箱。";
+    qqMailStatus.style.color = "#059669";
   } catch (error) {
     qqMailStatus.textContent = error instanceof Error ? error.message : "测试邮件发送失败。";
+    qqMailStatus.style.color = "#dc2626";
   } finally {
     setQqMailBusy(false);
   }
