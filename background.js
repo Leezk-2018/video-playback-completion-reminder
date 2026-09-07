@@ -2,7 +2,7 @@ const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
-const PLAYBACK_RATES = new Set([0.5, 0.75, 1, 1.25, 1.5, 2]);
+const PLAYBACK_RATES = new Set([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]);
 const REMINDER_MODES = new Set(["system", "qqmail", "both"]);
 
 const DEFAULT_TAB_SETTINGS = Object.freeze({
