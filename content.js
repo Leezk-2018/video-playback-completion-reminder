@@ -8,6 +8,10 @@
   }
 
   const PAUSE_TIMEOUT_MS = 20_000;
+  // Some course sites pause their video when the document becomes hidden.
+  // When monitoring is enabled, immediately resume a video that was already
+  // playing so switching tabs/minimizing the window does not stop playback.
+  const BACKGROUND_RESUME_RETRY_MS = 150;
   const videoMeta = new WeakMap();
 
   const state = {
@@ -68,14 +72,50 @@
     }
   }
 
+  function resumeInBackground(video, meta = videoMeta.get(video)) {
+    if (!state.monitoringEnabled || !document.hidden || video.ended || meta?.completed || !video.paused) {
+      return;
+    }
+
+    // play() can reject transiently while the site is changing its player
+    // state; a short retry handles that case without creating a polling loop.
+    Promise.resolve(video.play()).catch(() => {
+      setTimeout(() => {
+        if (state.monitoringEnabled && document.hidden && video.paused && !video.ended && !meta?.completed) {
+          Promise.resolve(video.play()).catch(() => {});
+        }
+      }, BACKGROUND_RESUME_RETRY_MS);
+    });
+  }
+
   function handleVideoPlaying(meta) {
     meta.hasPlayed = true;
+    // Only an explicit subsequent play starts a new playback cycle.
+    meta.completed = false;
+    meta.manuallyPaused = false;
     meta.alertFired = false;
     clearPauseTimer(meta);
   }
 
   function handleVideoPause(video, meta) {
     clearPauseTimer(meta);
+
+    if (!document.hidden) {
+      meta.manuallyPaused = true;
+    }
+
+    if (meta.completed) {
+      return;
+    }
+
+    if (state.monitoringEnabled && document.hidden && !meta.manuallyPaused && meta.hasPlayed && !isNearEnd(video)) {
+      resumeInBackground(video, meta);
+      return;
+    }
+
+    if (meta.manuallyPaused) {
+      return;
+    }
 
     if (!state.monitoringEnabled || !state.pauseReminderEnabled) {
       return;
@@ -115,6 +155,7 @@
 
   function handleVideoEnded(meta) {
     meta.hasPlayed = false;
+    meta.completed = true;
     meta.alertFired = true;
     clearPauseTimer(meta);
     reportCompletion();
@@ -138,6 +179,8 @@
     const meta = {
       pauseTimer: null,
       hasPlayed: !video.paused && video.currentTime > 0,
+      manuallyPaused: false,
+      completed: video.ended,
       alertFired: false,
       onEnded: () => handleVideoEnded(meta),
       onPlaying: () => handleVideoPlaying(meta),
@@ -214,6 +257,14 @@
       }
     }
     state.watchedVideos.clear();
+    document.removeEventListener("visibilitychange", handleVisibilityChange, true);
+  }
+
+  function handleVisibilityChange() {
+    if (!state.monitoringEnabled || !document.hidden) {
+      return;
+    }
+    state.watchedVideos.forEach((video) => resumeInBackground(video));
   }
 
   function startObserving() {
@@ -232,12 +283,17 @@
       childList: true,
       subtree: true
     });
+    document.addEventListener("visibilitychange", handleVisibilityChange, true);
+    handleVisibilityChange();
   }
 
   function applySettings(settings) {
     state.monitoringEnabled = settings?.enabled === true;
     state.playbackRate = Number(settings?.playbackRate) || 1;
     state.pauseReminderEnabled = settings?.pauseReminder !== false;
+    if (document.documentElement) {
+      document.documentElement.dataset.videoReminderEnabled = state.monitoringEnabled ? "1" : "0";
+    }
 
     if (!state.pauseReminderEnabled) {
       for (const video of state.watchedVideos) {

@@ -131,6 +131,11 @@ async function injectContentScript(tabId) {
     target: { tabId, allFrames: true },
     files: ["content.js"]
   });
+  await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    files: ["page-hook.js"],
+    world: "MAIN"
+  });
 }
 
 async function getTabStatus(tabId) {
