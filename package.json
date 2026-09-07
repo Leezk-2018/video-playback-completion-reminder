@@ -1,0 +1,9 @@
+{
+  "name": "video-playback-completion-reminder",
+  "private": true,
+  "version": "1.2.0",
+  "type": "module",
+  "scripts": {
+    "qq-mail-bridge": "node qq-mail-bridge.js"
+  }
+}

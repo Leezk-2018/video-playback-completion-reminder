@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>视频播放完成提醒</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="heading">
+        <img class="logo" src="../icons/icon.svg" alt="" />
+        <div>
+          <h1>视频播放完成提醒</h1>
+          <p>当前标签页</p>
+        </div>
+      </header>
+
+      <section class="status" aria-live="polite">
+        <span id="status-dot" class="status-dot" aria-hidden="true"></span>
+        <p id="status-text">正在检查页面状态...</p>
+      </section>
+
+      <section class="control-section" aria-labelledby="playback-rate-label">
+        <label id="playback-rate-label" for="playback-rate">播放倍速</label>
+        <select id="playback-rate" disabled>
+          <option value="0.5">0.5x</option>
+          <option value="0.75">0.75x</option>
+          <option value="1">1x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+        </select>
+      </section>
+
+      <section class="control-section" aria-labelledby="reminder-mode-label">
+        <label id="reminder-mode-label" for="reminder-mode">提醒类型</label>
+        <select id="reminder-mode">
+          <option value="system">系统通知</option>
+          <option value="qqmail">QQ 邮箱提醒</option>
+          <option value="both">系统通知 + QQ 邮箱</option>
+        </select>
+      </section>
+
+      <section id="qq-mail-settings" class="email-settings" hidden>
+        <p class="setup-hint">先运行项目里的 <code>start-qq-mail-bridge.ps1</code>，再把它显示的密钥粘贴到这里。</p>
+        <label for="qq-recipient">收件人 QQ 邮箱</label>
+        <input id="qq-recipient" type="email" autocomplete="email" placeholder="123456@qq.com" />
+
+        <label for="bridge-token">桥接服务连接密钥</label>
+        <input id="bridge-token" type="password" autocomplete="off" placeholder="从 PowerShell 窗口复制" />
+
+        <div class="email-actions">
+          <button id="save-qq-mail-settings" class="secondary-button" type="button">
+            保存设置
+          </button>
+          <button id="test-qq-mail" class="secondary-button" type="button">
+            发送测试邮件
+          </button>
+        </div>
+        <p id="qq-mail-status" class="field-status" aria-live="polite"></p>
+      </section>
+
+      <button id="toggle-button" class="toggle-button" type="button" disabled>
+        开始监测
+      </button>
+      <p id="detail-text" class="detail">视频结束后将发送系统通知。</p>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
