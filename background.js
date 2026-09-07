@@ -60,12 +60,13 @@ function normalizeReminderSettings(value) {
 }
 
 function isQqMailConfigured(settings) {
-  const { recipient, bridgeToken } = settings.qqMail;
+  const { recipient, bridgeToken } = settings?.qqMail || {};
   return Boolean(recipient && bridgeToken);
 }
 
 function withReminderMetadata(settings) {
   return {
+    success: true,
     ...settings,
     qqMailConfigured: isQqMailConfigured(settings)
   };

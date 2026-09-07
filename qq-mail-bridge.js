@@ -169,8 +169,8 @@ const server = http.createServer(async (request, response) => {
     const subject = typeof body.subject === "string" ? body.subject.trim() : "";
     const text = typeof body.text === "string" ? body.text.trim() : "";
 
-    if (!/^[1-9]\d{4,12}@qq\.com$/i.test(to) || !subject || !text) {
-      respond(response, 400, { error: "需要有效的 QQ 收件地址、主题和正文。" });
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(to) || !subject || !text) {
+      respond(response, 400, { error: "需要有效的收件邮箱地址、主题和正文。" });
       return;
     }
 

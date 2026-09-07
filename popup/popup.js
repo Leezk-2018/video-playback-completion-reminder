@@ -11,6 +11,7 @@ const pauseReminderToggle = document.querySelector("#pause-reminder-toggle");
 const qqMailSettings = document.querySelector("#qq-mail-settings");
 const qqRecipientInput = document.querySelector("#qq-recipient");
 const bridgeTokenInput = document.querySelector("#bridge-token");
+const toggleTokenVisibilityButton = document.querySelector("#toggle-token-visibility");
 const saveQqMailSettingsButton = document.querySelector("#save-qq-mail-settings");
 const testQqMailButton = document.querySelector("#test-qq-mail");
 const qqMailStatus = document.querySelector("#qq-mail-status");
@@ -40,8 +41,8 @@ function getQqMailSettingsFromForm() {
   };
 }
 
-function isQqMailbox(value) {
-  return /^[1-9]\d{4,12}@qq\.com$/i.test(value);
+function isValidEmail(value) {
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(value);
 }
 
 function setQqMailBusy(isBusy) {
@@ -69,8 +70,15 @@ function renderReminderSettings(settings, message) {
 
   reminderModeSelect.value = currentReminderSettings.mode;
   pauseReminderToggle.checked = currentReminderSettings.pauseReminder !== false;
-  qqRecipientInput.value = currentReminderSettings.qqMail.recipient;
-  bridgeTokenInput.value = currentReminderSettings.qqMail.bridgeToken;
+
+  // 保护正在输入的字段，避免被周期性状态刷新覆盖
+  if (document.activeElement !== qqRecipientInput) {
+    qqRecipientInput.value = currentReminderSettings.qqMail.recipient || "";
+  }
+  if (document.activeElement !== bridgeTokenInput) {
+    bridgeTokenInput.value = currentReminderSettings.qqMail.bridgeToken || "";
+  }
+
   qqMailSettings.hidden = !modeUsesQqMail(currentReminderSettings.mode);
 
   if (!modeUsesQqMail(currentReminderSettings.mode)) {
@@ -78,7 +86,7 @@ function renderReminderSettings(settings, message) {
     qqMailStatus.style.color = "";
   } else if (message) {
     qqMailStatus.textContent = message;
-    qqMailStatus.style.color = "";
+    qqMailStatus.style.color = message.startsWith("✓") ? "#059669" : "#dc2626";
   } else if (currentReminderSettings.qqMailConfigured) {
     qqMailStatus.textContent = "✓ QQ 邮箱已配置完成，随时可发信。";
     qqMailStatus.style.color = "#059669";
@@ -165,15 +173,36 @@ async function loadStatus() {
 
 async function saveReminderSettings(validateQqMailSettings) {
   const mode = reminderModeSelect.value;
-  const qqMail = getQqMailSettingsFromForm();
+  const formMail = getQqMailSettingsFromForm();
   const pauseReminder = pauseReminderToggle.checked;
 
+  let qqMailToSave;
+
   if (validateQqMailSettings && modeUsesQqMail(mode)) {
-    if (!isQqMailbox(qqMail.recipient) || !qqMail.bridgeToken) {
-      qqMailStatus.textContent = "请填写有效的 QQ 邮箱和连接密钥。";
+    if (!formMail.recipient) {
+      qqMailStatus.textContent = "请填写收件人邮箱地址。";
       qqMailStatus.style.color = "#dc2626";
+      qqRecipientInput.focus();
       return false;
     }
+    if (!isValidEmail(formMail.recipient)) {
+      qqMailStatus.textContent = "邮箱地址格式不正确，请输入有效的邮箱（如 123456@qq.com）。";
+      qqMailStatus.style.color = "#dc2626";
+      qqRecipientInput.focus();
+      return false;
+    }
+    if (!formMail.bridgeToken) {
+      qqMailStatus.textContent = "请从 PowerShell 窗口复制并填写桥接服务连接密钥。";
+      qqMailStatus.style.color = "#dc2626";
+      bridgeTokenInput.focus();
+      return false;
+    }
+    qqMailToSave = formMail;
+  } else {
+    // 切换提醒模式或防挂机开关时，若表单尚未保存，优先保留已存储的有效凭据
+    qqMailToSave = (formMail.recipient && formMail.bridgeToken)
+      ? formMail
+      : currentReminderSettings.qqMail;
   }
 
   setQqMailBusy(true);
@@ -181,14 +210,18 @@ async function saveReminderSettings(validateQqMailSettings) {
     const settings = await chrome.runtime.sendMessage({
       type: "SAVE_REMINDER_SETTINGS",
       mode,
-      qqMail,
+      qqMail: qqMailToSave,
       pauseReminder
     });
 
     if (!settings || settings.success === false) {
       throw new Error(settings?.error || "无法保存提醒设置。");
     }
-    renderReminderSettings(settings);
+
+    renderReminderSettings(
+      settings,
+      validateQqMailSettings ? "✓ 配置已成功保存！" : undefined
+    );
     return true;
   } catch (error) {
     qqMailStatus.textContent = error instanceof Error ? error.message : "保存失败，请重试。";
@@ -268,8 +301,24 @@ pauseReminderToggle.addEventListener("change", async () => {
   }
 });
 
+// 保存设置按钮
 saveQqMailSettingsButton.addEventListener("click", () => {
   saveReminderSettings(true);
+});
+
+// 回车快捷保存
+qqRecipientInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveReminderSettings(true);
+});
+bridgeTokenInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveReminderSettings(true);
+});
+
+// 密钥可见性切换 (明文/密文)
+toggleTokenVisibilityButton?.addEventListener("click", () => {
+  const isPassword = bridgeTokenInput.type === "password";
+  bridgeTokenInput.type = isPassword ? "text" : "password";
+  toggleTokenVisibilityButton.title = isPassword ? "隐藏密钥" : "显示密钥";
 });
 
 testQqMailButton.addEventListener("click", async () => {

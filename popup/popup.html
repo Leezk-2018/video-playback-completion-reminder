@@ -126,7 +126,15 @@
 
         <div class="form-group">
           <label for="bridge-token">桥接服务连接密钥</label>
-          <input id="bridge-token" type="password" autocomplete="off" placeholder="从 PowerShell 窗口复制" />
+          <div class="password-field">
+            <input id="bridge-token" type="password" autocomplete="off" placeholder="从 PowerShell 窗口复制" />
+            <button id="toggle-token-visibility" type="button" class="btn-icon-inline" title="显示/隐藏密钥">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="email-actions">

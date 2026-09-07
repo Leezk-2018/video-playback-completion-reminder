@@ -6,8 +6,8 @@ Write-Host 'Use the QQ Mail authorization code, not your QQ login password.' -Fo
 Write-Host ''
 
 $sender = Read-Host 'Sender QQ mailbox (for example 123456@qq.com)'
-if ($sender -notmatch '^[1-9]\d{4,12}@qq\.com$') {
-  throw 'Please enter a valid QQ mailbox address.'
+if ($sender -notmatch '^[a-zA-Z0-9._%+-]+@(qq|vip\.qq|foxmail)\.com$') {
+  throw 'Please enter a valid QQ or Foxmail mailbox address.'
 }
 
 $authorizationCode = Read-Host 'QQ Mail authorization code' -AsSecureString
