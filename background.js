@@ -7,7 +7,9 @@ const REMINDER_MODES = new Set(["system", "qqmail", "both"]);
 
 const DEFAULT_TAB_SETTINGS = Object.freeze({
   enabled: false,
-  playbackRate: 1
+  playbackRate: 1,
+  continuousPlay: false,
+  skipWatched: false
 });
 
 const DEFAULT_REMINDER_SETTINGS = Object.freeze({
@@ -40,7 +42,9 @@ function normalizePlaybackRate(value) {
 function normalizeTabSettings(value) {
   return {
     enabled: value?.enabled === true,
-    playbackRate: normalizePlaybackRate(value?.playbackRate)
+    playbackRate: normalizePlaybackRate(value?.playbackRate),
+    continuousPlay: value?.continuousPlay === true,
+    skipWatched: value?.skipWatched === true
   };
 }
 
@@ -92,7 +96,7 @@ async function saveTabSettings(tabId, settings) {
   const normalized = normalizeTabSettings(settings);
   const key = tabSessionKey(tabId);
 
-  if (!normalized.enabled && normalized.playbackRate === 1) {
+  if (!normalized.enabled && normalized.playbackRate === 1 && !normalized.continuousPlay && !normalized.skipWatched) {
     await chrome.storage.session.remove(key);
     return normalized;
   }
@@ -159,6 +163,282 @@ async function getTabStatus(tabId) {
       supported: false,
       reminderSettings: await getReminderSettings()
     };
+  }
+}
+
+// This function is intentionally self-contained: chrome.scripting serializes it
+// and runs it in every accessible frame of the active tab.
+async function extractCatalogFromDocument() {
+  const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const isVisible = (element) => {
+    const style = getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden";
+  };
+  const describe = (element) => `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${typeof element.className === "string" && element.className ? `.${element.className.split(/\s+/).slice(0, 3).join(".")}` : ""}`;
+  const catalogPattern = /catalog|chapter|lesson|courseware|curriculum|outline|目录|章节|课时|课程|大纲/i;
+  const rowPattern = /chapter|lesson|course|section|item|node|目录|章节|课时|课程/i;
+
+  // 国家中小学智慧教育平台教师端的真实课程目录：资源项即实际可播放课时。
+  // 样式模块 hash 会变化，因此只匹配稳定的 class 前缀。
+  const exactCatalogRoot = document.querySelector('[class*="index-module_detail-main-r_"]');
+  if (exactCatalogRoot) {
+    // 该站点按层级懒渲染课时。逐层展开可以让尚未挂载的 resource-item
+    // 出现在 DOM；读取完成后会恢复用户原先的折叠状态。
+    const collapsedHeadersToRestore = new Set();
+    let expandedCount = 0;
+    for (let level = 0; level < 12; level += 1) {
+      const collapsedHeaders = [...exactCatalogRoot.querySelectorAll('.fish-collapse-header[aria-expanded="false"]')];
+      if (!collapsedHeaders.length) break;
+      collapsedHeaders.forEach((header) => collapsedHeadersToRestore.add(header));
+      collapsedHeaders.forEach((header) => header.click());
+      expandedCount += collapsedHeaders.length;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+
+    const items = [...exactCatalogRoot.querySelectorAll(".resource-item")].map((resource) => {
+      const title = normalizeText(resource.querySelector(":scope > div:first-child")?.textContent);
+      const status = normalizeText(resource.querySelector(".status-icon [title]")?.getAttribute("title"));
+      const path = [];
+      let section = resource.closest(".fish-collapse-item");
+      while (section && exactCatalogRoot.contains(section)) {
+        const header = section.querySelector(":scope > .fish-collapse-header");
+        const sectionTitle = normalizeText(header?.textContent);
+        if (sectionTitle) path.unshift(sectionTitle);
+        section = section.parentElement?.closest(".fish-collapse-item");
+      }
+      return {
+        title,
+        path,
+        url: "",
+        active: resource.classList.contains("resource-item-active") || status === "进行中",
+        completed: status === "已学完",
+        status: status || "未知状态",
+        source: "smartedu-resource-item"
+      };
+    }).filter(({ title }) => title);
+    const debug = {
+      strategy: "smartedu-resource-item",
+      url: location.href,
+      title: document.title,
+      root: describe(exactCatalogRoot),
+      initiallyCollapsedCount: collapsedHeadersToRestore.size,
+      expandedCount,
+      itemCount: items.length,
+      sample: items.slice(0, 10)
+    };
+    // 反向恢复：先收子级，再收父级，避免关闭父级时销毁仍待恢复的子节点。
+    [...collapsedHeadersToRestore].reverse().forEach((header) => {
+      if (header.isConnected && header.getAttribute("aria-expanded") === "true") header.click();
+    });
+    return { items, debug };
+  }
+
+  const candidates = [...document.querySelectorAll("[id], [class], [role='tree'], [role='list'], nav, aside")]
+    .filter((element) => catalogPattern.test(`${element.id} ${typeof element.className === "string" ? element.className : ""} ${element.getAttribute("aria-label") || ""}`))
+    .filter(isVisible)
+    .map((element) => ({
+      element,
+      score: element.querySelectorAll("a, button, [role='treeitem'], li").length
+    }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 5);
+
+  const roots = candidates.length ? candidates.map(({ element }) => element) : [document.body];
+  const rows = [];
+  const seen = new Set();
+
+  for (const root of roots) {
+    const rowNodes = root.querySelectorAll("[role='treeitem'], [role='listitem'], li, a, button, [data-index], [data-id]");
+    for (const node of rowNodes) {
+      if (!isVisible(node)) continue;
+      const classAndAttributes = `${node.id} ${typeof node.className === "string" ? node.className : ""} ${node.getAttribute("aria-label") || ""}`;
+      const interactive = node.matches("a, button, [role='treeitem'], [role='listitem']") || rowPattern.test(classAndAttributes);
+      if (!interactive) continue;
+
+      const title = normalizeText(node.getAttribute("aria-label") || node.getAttribute("title") || node.textContent);
+      if (!title || title.length > 160 || /^(目录|章节|课时|课程)$/i.test(title)) continue;
+      const link = node.closest("a") || node.querySelector("a");
+      const url = link?.href || "";
+      const dedupeKey = `${title}|${url}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const stateText = `${classAndAttributes} ${node.getAttribute("aria-current") || ""}`;
+      rows.push({
+        title,
+        url,
+        active: node.getAttribute("aria-current") === "true" || /active|current|selected|playing|正在播放|当前/.test(stateText),
+        completed: /complete|finished|done|已学|已完成|已观看/.test(stateText),
+        source: describe(node)
+      });
+      if (rows.length >= 100) break;
+    }
+    if (rows.length >= 100) break;
+  }
+
+  const debug = {
+    url: location.href,
+    title: document.title,
+    candidateCount: candidates.length,
+    candidates: candidates.map(({ element, score }) => ({ selector: describe(element), score })),
+    itemCount: rows.length,
+    sample: rows.slice(0, 10)
+  };
+  return { items: rows, debug };
+}
+
+async function getPageCatalog(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!isSupportedUrl(tab.url)) {
+    return { success: false, error: "此页面不支持读取目录。", items: [] };
+  }
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: extractCatalogFromDocument
+  });
+  const seen = new Set();
+  const items = [];
+  const frames = [];
+  for (const entry of results) {
+    const result = entry.result || { items: [], debug: {} };
+    frames.push({ frameId: entry.frameId, ...result.debug });
+    for (const item of result.items || []) {
+      const key = `${item.title}|${item.url}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        items.push({ ...item, frameId: entry.frameId });
+      }
+    }
+  }
+  return { success: true, items, frames };
+}
+
+async function clickCatalogItemInDocument({ title, path } = {}) {
+  const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const waitForPlayback = async () => {
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+      const videos = [...document.querySelectorAll("video")];
+      const candidates = videos.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
+      for (const video of candidates.length ? candidates : videos) {
+        if (video.ended) continue;
+        try {
+          await video.play();
+          return true;
+        } catch {
+          // Player may still be loading; retry after a short delay.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  };
+  const root = document.querySelector('[class*="index-module_detail-main-r_"]');
+  if (!root || !title) return { success: false };
+
+  // 目录是懒渲染的，点击前展开全部层级，确保目标资源已挂载。
+  for (let level = 0; level < 12; level += 1) {
+    const collapsed = [...root.querySelectorAll('.fish-collapse-header[aria-expanded="false"]')];
+    if (!collapsed.length) break;
+    collapsed.forEach((header) => header.click());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  const resources = [...root.querySelectorAll(".resource-item")];
+  const target = resources.find((resource) => {
+    const resourceTitle = normalizeText(resource.querySelector(":scope > div:first-child")?.textContent);
+    if (resourceTitle !== title) return false;
+    if (!Array.isArray(path) || !path.length) return true;
+    const headers = [];
+    let section = resource.closest(".fish-collapse-item");
+    while (section && root.contains(section)) {
+      headers.unshift(normalizeText(section.querySelector(":scope > .fish-collapse-header")?.textContent));
+      section = section.parentElement?.closest(".fish-collapse-item");
+    }
+    return path.every((part, index) => headers[index] === part);
+  });
+
+  if (!target) return { success: false };
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.click();
+  const played = await waitForPlayback();
+  return { success: true, title, played };
+}
+
+async function playCatalogItem(tabId, item) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!isSupportedUrl(tab.url)) return { success: false, error: "此页面不支持播放目录视频。" };
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: clickCatalogItemInDocument,
+    args: [item]
+  });
+  return results.find((entry) => entry.result?.success)?.result || {
+    success: false,
+    error: "未找到对应的视频目录项。"
+  };
+}
+
+async function advanceCatalogInDocument({ skipWatched = false } = {}) {
+  const waitForPlayback = async () => {
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+      const videos = [...document.querySelectorAll("video")];
+      const candidates = videos.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
+      for (const video of candidates.length ? candidates : videos) {
+        if (video.ended) continue;
+        try {
+          await video.play();
+          return true;
+        } catch {
+          // Player may still be loading; retry after a short delay.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  };
+  const root = document.querySelector('[class*="index-module_detail-main-r_"]');
+  if (!root) return { success: false };
+  for (let level = 0; level < 12; level += 1) {
+    const collapsed = [...root.querySelectorAll('.fish-collapse-header[aria-expanded="false"]')];
+    if (!collapsed.length) break;
+    collapsed.forEach((header) => header.click());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const resources = [...root.querySelectorAll(".resource-item")];
+  if (!resources.length) return { success: false };
+  const currentIndex = resources.findIndex((resource) =>
+    resource.classList.contains("resource-item-active") ||
+    resource.querySelector('.status-icon [title="进行中"]')
+  );
+  const start = currentIndex >= 0 ? currentIndex + 1 : 0;
+  const target = resources.slice(start).find((resource) => {
+    const status = resource.querySelector(".status-icon [title]")?.getAttribute("title") || "";
+    return !skipWatched || status !== "已学完";
+  });
+  if (!target) return { success: false, done: true };
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.click();
+  const played = await waitForPlayback();
+  return { success: true, played, title: target.querySelector(":scope > div:first-child")?.textContent?.trim() || "" };
+}
+
+const catalogAdvanceLocks = new Map();
+async function advanceCatalogPlayback(tabId, skipWatched) {
+  if (catalogAdvanceLocks.get(tabId)) return { success: false, locked: true };
+  catalogAdvanceLocks.set(tabId, true);
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: advanceCatalogInDocument,
+      args: [{ skipWatched: skipWatched === true }]
+    });
+    return results.find((entry) => entry.result?.success)?.result || { success: false };
+  } finally {
+    setTimeout(() => catalogAdvanceLocks.delete(tabId), 1200);
   }
 }
 
@@ -381,6 +661,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return respond(getTabStatus(message.tabId), sendResponse);
   }
 
+  if (message.type === "GET_PAGE_CATALOG") {
+    return respond(getPageCatalog(message.tabId), sendResponse);
+  }
+
+  if (message.type === "PLAY_CATALOG_ITEM") {
+    return respond(playCatalogItem(message.tabId, message.item), sendResponse);
+  }
+
   if (message.type === "SET_TRACKING") {
     return respond(
       updateCurrentTabSettings(message.tabId, { enabled: message.enabled === true }),
@@ -396,6 +684,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return respond(
       updateCurrentTabSettings(message.tabId, { playbackRate }),
+      sendResponse
+    );
+  }
+
+  if (message.type === "SET_CATALOG_OPTIONS") {
+    return respond(
+      updateCurrentTabSettings(message.tabId, {
+        continuousPlay: message.continuousPlay === true,
+        skipWatched: message.skipWatched === true
+      }),
       sendResponse
     );
   }
@@ -420,6 +718,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendCompletionReminders(sender.tab.id, message.pageTitle).catch(() => {
       // A delivery failure must not disrupt page-side video monitoring.
     });
+    getTabSettings(sender.tab.id).then((settings) => {
+      if (settings.enabled && settings.continuousPlay) {
+        return advanceCatalogPlayback(sender.tab.id, settings.skipWatched);
+      }
+    }).catch(() => {});
   }
 
   if (message.type === "VIDEO_PAUSED" && sender.tab?.id !== undefined) {

@@ -20,6 +20,8 @@
     pauseReminderEnabled: true,
     observer: null,
     playbackRate: 1,
+    continuousPlay: false,
+    skipWatched: false,
     watchedVideos: new Set(),
     bootstrap
   };
@@ -290,6 +292,8 @@
   function applySettings(settings) {
     state.monitoringEnabled = settings?.enabled === true;
     state.playbackRate = Number(settings?.playbackRate) || 1;
+    state.continuousPlay = settings?.continuousPlay === true;
+    state.skipWatched = settings?.skipWatched === true;
     state.pauseReminderEnabled = settings?.pauseReminder !== false;
     if (document.documentElement) {
       document.documentElement.dataset.videoReminderEnabled = state.monitoringEnabled ? "1" : "0";

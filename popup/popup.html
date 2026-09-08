@@ -31,6 +31,22 @@
         </div>
       </section>
 
+      <!-- 当前页面目录（只读解析） -->
+      <section class="card catalog-card">
+        <div class="card-header catalog-header">
+          <div class="card-title">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+            <span>页面目录</span>
+          </div>
+          <button id="refresh-catalog" class="catalog-refresh" type="button">解析</button>
+        </div>
+        <p id="catalog-status" class="catalog-status" aria-live="polite">打开面板后自动解析当前页面。</p>
+        <ol id="catalog-list" class="catalog-list" hidden></ol>
+      </section>
+
       <!-- 快捷倍速面板 -->
       <section class="card">
         <div class="card-header">
@@ -85,6 +101,30 @@
         </div>
 
         <div class="card-divider"></div>
+
+        <div class="card-row switch-row">
+          <div class="switch-meta">
+            <div class="card-title"><span>连续播放</span></div>
+            <p class="switch-subtext">当前视频结束后自动播放下一个</p>
+          </div>
+          <label class="switch" title="视频结束后自动播放下一个目录视频">
+            <input id="continuous-play-toggle" type="checkbox" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="card-divider"></div>
+
+        <div class="card-row switch-row">
+          <div class="switch-meta">
+            <div class="card-title"><span>跳过已看</span></div>
+            <p class="switch-subtext">连续播放时跳过已学完的视频</p>
+          </div>
+          <label class="switch" title="连续播放时跳过已学完的视频">
+            <input id="skip-watched-toggle" type="checkbox" />
+            <span class="slider"></span>
+          </label>
+        </div>
 
         <!-- 防挂机 / 异常暂停检测 (iOS 风格开关) -->
         <div class="card-row switch-row">

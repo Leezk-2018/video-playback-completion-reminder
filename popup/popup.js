@@ -8,6 +8,8 @@ const playbackRateSelect = document.querySelector("#playback-rate");
 const rateChips = document.querySelectorAll(".rate-chip");
 const reminderModeSelect = document.querySelector("#reminder-mode");
 const pauseReminderToggle = document.querySelector("#pause-reminder-toggle");
+const continuousPlayToggle = document.querySelector("#continuous-play-toggle");
+const skipWatchedToggle = document.querySelector("#skip-watched-toggle");
 const qqMailSettings = document.querySelector("#qq-mail-settings");
 const qqRecipientInput = document.querySelector("#qq-recipient");
 const bridgeTokenInput = document.querySelector("#bridge-token");
@@ -15,6 +17,9 @@ const toggleTokenVisibilityButton = document.querySelector("#toggle-token-visibi
 const saveQqMailSettingsButton = document.querySelector("#save-qq-mail-settings");
 const testQqMailButton = document.querySelector("#test-qq-mail");
 const qqMailStatus = document.querySelector("#qq-mail-status");
+const catalogList = document.querySelector("#catalog-list");
+const catalogStatus = document.querySelector("#catalog-status");
+const refreshCatalogButton = document.querySelector("#refresh-catalog");
 
 const DEFAULT_REMINDER_SETTINGS = {
   mode: "system",
@@ -27,7 +32,7 @@ const DEFAULT_REMINDER_SETTINGS = {
 };
 
 let currentTabId = null;
-let currentStatus = { enabled: false, supported: false, playbackRate: 1 };
+let currentStatus = { enabled: false, supported: false, playbackRate: 1, continuousPlay: false, skipWatched: false };
 let currentReminderSettings = DEFAULT_REMINDER_SETTINGS;
 
 function modeUsesQqMail(mode) {
@@ -70,6 +75,8 @@ function renderReminderSettings(settings, message) {
 
   reminderModeSelect.value = currentReminderSettings.mode;
   pauseReminderToggle.checked = currentReminderSettings.pauseReminder !== false;
+  continuousPlayToggle.checked = currentStatus.continuousPlay === true;
+  skipWatchedToggle.checked = currentStatus.skipWatched === true;
 
   // 保护正在输入的字段，避免被周期性状态刷新覆盖
   if (document.activeElement !== qqRecipientInput) {
@@ -102,6 +109,8 @@ function setStatus(status, detail) {
   const isSupported = Boolean(currentStatus.supported);
   const isEnabled = Boolean(currentStatus.enabled);
   const currentRate = Number(currentStatus.playbackRate || 1);
+  continuousPlayToggle.checked = currentStatus.continuousPlay === true;
+  skipWatchedToggle.checked = currentStatus.skipWatched === true;
 
   statusDot.classList.toggle("active", isEnabled);
   statusDot.classList.toggle("unsupported", !isSupported);
@@ -110,6 +119,8 @@ function setStatus(status, detail) {
 
   playbackRateSelect.value = String(currentRate);
   playbackRateSelect.disabled = !isSupported;
+  continuousPlayToggle.disabled = !isSupported;
+  skipWatchedToggle.disabled = !isSupported;
   updateRateChips(currentRate, isSupported);
 
   if (status.reminderSettings) {
@@ -168,6 +179,76 @@ async function loadStatus() {
     setStatus(status || { enabled: false, supported: false });
   } catch {
     setStatus({ enabled: false, supported: false }, "无法读取当前标签页状态。");
+  }
+}
+
+function renderCatalog(items, message) {
+  catalogList.replaceChildren();
+  if (!items?.length) {
+    catalogList.hidden = true;
+    catalogStatus.textContent = message || "未识别到目录；请抓取调试日志以便适配页面。";
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  items.forEach((item, index) => {
+    const row = document.createElement("li");
+    row.className = "catalog-item";
+    if (item.active) row.classList.add("active");
+    if (item.completed) row.classList.add("completed");
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "catalog-item-title";
+    label.textContent = item.title;
+    label.addEventListener("click", async () => {
+      label.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: "PLAY_CATALOG_ITEM",
+          tabId: currentTabId,
+          item: { title: item.title, path: item.path }
+        });
+        if (!result?.success) {
+          catalogStatus.textContent = result?.error || "无法打开对应视频。";
+        }
+      } catch {
+        catalogStatus.textContent = "无法打开对应视频，请重试。";
+      } finally {
+        label.disabled = false;
+      }
+    });
+    const order = document.createElement("span");
+    order.className = "catalog-item-order";
+    order.textContent = String(index + 1);
+    const content = document.createElement("div");
+    content.className = "catalog-item-content";
+    content.append(label);
+    if (item.path?.length || item.status) {
+      const meta = document.createElement("span");
+      meta.className = "catalog-item-meta";
+      meta.textContent = [...(item.path || []), item.status].filter(Boolean).join(" · ");
+      content.append(meta);
+    }
+    row.append(order, content);
+    fragment.append(row);
+  });
+  catalogList.append(fragment);
+  catalogList.hidden = false;
+  catalogStatus.textContent = `已识别 ${items.length} 个目录项${items.some((item) => item.active) ? "，已标出当前项" : ""}。`;
+}
+
+async function loadCatalog() {
+  if (currentTabId === null) return;
+  refreshCatalogButton.disabled = true;
+  catalogStatus.textContent = "正在解析主页面与 iframe 中的目录...";
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "GET_PAGE_CATALOG", tabId: currentTabId });
+    if (!result?.success) throw new Error(result?.error || "目录解析失败。");
+    renderCatalog(result.items);
+  } catch (error) {
+    renderCatalog([], error instanceof Error ? error.message : "目录解析失败。");
+  } finally {
+    refreshCatalogButton.disabled = false;
   }
 }
 
@@ -301,6 +382,29 @@ pauseReminderToggle.addEventListener("change", async () => {
   }
 });
 
+async function saveCatalogOptions() {
+  continuousPlayToggle.disabled = true;
+  skipWatchedToggle.disabled = true;
+  try {
+    const status = await chrome.runtime.sendMessage({
+      type: "SET_CATALOG_OPTIONS",
+      tabId: currentTabId,
+      continuousPlay: continuousPlayToggle.checked,
+      skipWatched: skipWatchedToggle.checked
+    });
+    setStatus(status || currentStatus, status?.error);
+  } catch {
+    catalogStatus.textContent = "目录播放设置保存失败，请重试。";
+  } finally {
+    const enabled = Boolean(currentStatus.supported);
+    continuousPlayToggle.disabled = !enabled;
+    skipWatchedToggle.disabled = !enabled;
+  }
+}
+
+continuousPlayToggle.addEventListener("change", saveCatalogOptions);
+skipWatchedToggle.addEventListener("change", saveCatalogOptions);
+
 // 保存设置按钮
 saveQqMailSettingsButton.addEventListener("click", () => {
   saveReminderSettings(true);
@@ -345,4 +449,5 @@ testQqMailButton.addEventListener("click", async () => {
 });
 
 renderReminderSettings(DEFAULT_REMINDER_SETTINGS);
-loadStatus();
+loadStatus().then(loadCatalog);
+refreshCatalogButton.addEventListener("click", loadCatalog);
