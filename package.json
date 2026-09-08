@@ -2,6 +2,7 @@
   "name": "video-playback-completion-reminder",
   "private": true,
   "version": "1.2.0",
+  "description": "Chrome extension for course catalog playback, completion tracking, and system or QQ mail reminders.",
   "type": "module",
   "scripts": {
     "qq-mail-bridge": "node qq-mail-bridge.js"

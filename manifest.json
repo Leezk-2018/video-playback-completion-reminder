@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "视频完播提醒",
-  "description": "监测网页视频播放，控制播放倍速，并在结束时发送系统或 QQ 邮箱提醒。",
+  "description": "识别课程目录并管理网页视频播放，支持倍速、连续播放、跳过已看及系统和 QQ 邮箱提醒。",
   "version": "1.2.0",
   "permissions": [
     "activeTab",
