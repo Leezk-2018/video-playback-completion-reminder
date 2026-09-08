@@ -5,7 +5,8 @@ const detailText = document.querySelector("#detail-text");
 const headerBadge = document.querySelector("#header-badge");
 const toggleButton = document.querySelector("#toggle-button");
 const playbackRateSelect = document.querySelector("#playback-rate");
-const reminderModeSelect = document.querySelector("#reminder-mode");
+const systemReminderToggle = document.querySelector("#system-reminder-toggle");
+const mailReminderToggle = document.querySelector("#mail-reminder-toggle");
 const pauseReminderToggle = document.querySelector("#pause-reminder-toggle");
 const continuousPlayToggle = document.querySelector("#continuous-play-toggle");
 const skipWatchedToggle = document.querySelector("#skip-watched-toggle");
@@ -18,6 +19,7 @@ const testQqMailButton = document.querySelector("#test-qq-mail");
 const qqMailStatus = document.querySelector("#qq-mail-status");
 const catalogList = document.querySelector("#catalog-list");
 const catalogStatus = document.querySelector("#catalog-status");
+const catalogStats = document.querySelector("#catalog-stats");
 const refreshCatalogButton = document.querySelector("#refresh-catalog");
 
 const DEFAULT_REMINDER_SETTINGS = {
@@ -38,6 +40,13 @@ function modeUsesQqMail(mode) {
   return mode === "qqmail" || mode === "both";
 }
 
+function selectedReminderMode() {
+  if (systemReminderToggle.checked && mailReminderToggle.checked) return "both";
+  if (systemReminderToggle.checked) return "system";
+  if (mailReminderToggle.checked) return "qqmail";
+  return "none";
+}
+
 function getQqMailSettingsFromForm() {
   return {
     recipient: qqRecipientInput.value.trim(),
@@ -50,7 +59,8 @@ function isValidEmail(value) {
 }
 
 function setQqMailBusy(isBusy) {
-  reminderModeSelect.disabled = isBusy;
+  systemReminderToggle.disabled = isBusy;
+  mailReminderToggle.disabled = isBusy;
   pauseReminderToggle.disabled = isBusy;
   saveQqMailSettingsButton.disabled = isBusy;
   testQqMailButton.disabled = isBusy;
@@ -63,7 +73,8 @@ function renderReminderSettings(settings, message) {
     qqMail: { ...DEFAULT_REMINDER_SETTINGS.qqMail, ...settings?.qqMail }
   };
 
-  reminderModeSelect.value = currentReminderSettings.mode;
+  systemReminderToggle.checked = currentReminderSettings.mode === "system" || currentReminderSettings.mode === "both";
+  mailReminderToggle.checked = currentReminderSettings.mode === "qqmail" || currentReminderSettings.mode === "both";
   pauseReminderToggle.checked = currentReminderSettings.pauseReminder !== false;
   continuousPlayToggle.checked = currentStatus.continuousPlay === true;
   skipWatchedToggle.checked = currentStatus.skipWatched === true;
@@ -175,6 +186,7 @@ function renderCatalog(items, message) {
   catalogList.replaceChildren();
   if (!items?.length) {
     catalogList.hidden = true;
+    catalogStats.hidden = true;
     catalogStatus.textContent = message || "未识别到目录；请抓取调试日志以便适配页面。";
     return;
   }
@@ -223,15 +235,22 @@ function renderCatalog(items, message) {
   });
   catalogList.append(fragment);
   catalogList.hidden = false;
-  catalogStatus.textContent = `已识别 ${items.length} 个目录项${items.some((item) => item.active) ? "，已标出当前项" : ""}。`;
+  const completedCount = items.filter((item) => item.completed).length;
+  catalogStats.textContent = `总计 ${items.length} · 已播放 ${completedCount} · 剩余 ${items.length - completedCount}`;
+  catalogStats.hidden = false;
+  catalogStatus.textContent = "点击课时即可切换并播放。";
 }
 
-async function loadCatalog() {
+async function loadCatalog(forceRefresh = false) {
   if (currentTabId === null) return;
   refreshCatalogButton.disabled = true;
-  catalogStatus.textContent = "正在解析主页面与 iframe 中的目录...";
+  catalogStatus.textContent = forceRefresh ? "正在重新解析页面目录..." : "正在读取页面目录...";
   try {
-    const result = await chrome.runtime.sendMessage({ type: "GET_PAGE_CATALOG", tabId: currentTabId });
+    const result = await chrome.runtime.sendMessage({
+      type: "GET_PAGE_CATALOG",
+      tabId: currentTabId,
+      forceRefresh
+    });
     if (!result?.success) throw new Error(result?.error || "目录解析失败。");
     renderCatalog(result.items);
   } catch (error) {
@@ -242,7 +261,7 @@ async function loadCatalog() {
 }
 
 async function saveReminderSettings(validateQqMailSettings) {
-  const mode = reminderModeSelect.value;
+  const mode = selectedReminderMode();
   const formMail = getQqMailSettingsFromForm();
   const pauseReminder = pauseReminderToggle.checked;
 
@@ -352,10 +371,13 @@ playbackRateSelect.addEventListener("change", () => {
   applyPlaybackRate(rate);
 });
 
-reminderModeSelect.addEventListener("change", () => {
-  qqMailSettings.hidden = !modeUsesQqMail(reminderModeSelect.value);
+function handleReminderModeChange() {
+  qqMailSettings.hidden = !modeUsesQqMail(selectedReminderMode());
   saveReminderSettings(false);
-});
+}
+
+systemReminderToggle.addEventListener("change", handleReminderModeChange);
+mailReminderToggle.addEventListener("change", handleReminderModeChange);
 
 pauseReminderToggle.addEventListener("change", async () => {
   await saveReminderSettings(false);
@@ -435,4 +457,4 @@ testQqMailButton.addEventListener("click", async () => {
 
 renderReminderSettings(DEFAULT_REMINDER_SETTINGS);
 loadStatus().then(loadCatalog);
-refreshCatalogButton.addEventListener("click", loadCatalog);
+refreshCatalogButton.addEventListener("click", () => loadCatalog(true));

@@ -1,8 +1,9 @@
 const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
+const catalogCache = new Map();
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
-const REMINDER_MODES = new Set(["system", "qqmail", "both"]);
+const REMINDER_MODES = new Set(["none", "system", "qqmail", "both"]);
 
 const DEFAULT_TAB_SETTINGS = Object.freeze({
   enabled: false,
@@ -290,10 +291,15 @@ async function extractCatalogFromDocument() {
   return { items: rows, debug };
 }
 
-async function getPageCatalog(tabId) {
+async function getPageCatalog(tabId, forceRefresh = false) {
   const tab = await chrome.tabs.get(tabId);
   if (!isSupportedUrl(tab.url)) {
     return { success: false, error: "此页面不支持读取目录。", items: [] };
+  }
+
+  const cached = catalogCache.get(tabId);
+  if (!forceRefresh && cached?.url === tab.url) {
+    return { success: true, items: cached.items, frames: cached.frames, lastCompletedTitle: cached.lastCompletedTitle || "", cached: true };
   }
 
   const results = await chrome.scripting.executeScript({
@@ -314,7 +320,30 @@ async function getPageCatalog(tabId) {
       }
     }
   }
-  return { success: true, items, frames };
+  const result = { success: true, items, frames, cached: false };
+  catalogCache.set(tabId, { url: tab.url, items, frames, lastCompletedTitle: "" });
+  return result;
+}
+
+function updateCachedCatalogActiveItem(tabId, title) {
+  const cached = catalogCache.get(tabId);
+  if (!cached || !title) return;
+  let found = false;
+  cached.items = cached.items.map((item) => {
+    if (item.title === title && !found) {
+      found = true;
+      return { ...item, active: true };
+    }
+    return item.active ? { ...item, active: false } : item;
+  });
+}
+
+function markCachedCatalogActiveItemCompleted(tabId) {
+  const cached = catalogCache.get(tabId);
+  if (!cached) return;
+  cached.items = cached.items.map((item) => item.active
+    ? (cached.lastCompletedTitle = item.title, { ...item, active: false, completed: true, status: "已学完" })
+    : item);
 }
 
 async function clickCatalogItemInDocument({ title, path } = {}) {
@@ -377,7 +406,9 @@ async function playCatalogItem(tabId, item) {
     func: clickCatalogItemInDocument,
     args: [item]
   });
-  return results.find((entry) => entry.result?.success)?.result || {
+  const result = results.find((entry) => entry.result?.success)?.result;
+  if (result?.success) updateCachedCatalogActiveItem(tabId, result.title);
+  return result || {
     success: false,
     error: "未找到对应的视频目录项。"
   };
@@ -438,7 +469,9 @@ async function advanceCatalogPlayback(tabId, skipWatched) {
       func: advanceCatalogInDocument,
       args: [{ skipWatched: skipWatched === true }]
     });
-    return results.find((entry) => entry.result?.success)?.result || { success: false };
+    const result = results.find((entry) => entry.result?.success)?.result || { success: false };
+    if (result.success) updateCachedCatalogActiveItem(tabId, result.title);
+    return result;
   } finally {
     setTimeout(() => catalogAdvanceLocks.delete(tabId), 1200);
   }
@@ -529,15 +562,24 @@ async function requestQqMailDelivery({ subject, text }) {
 
 async function sendQqMailReminder(tabId, pageTitle) {
   const tab = await chrome.tabs.get(tabId);
+  const catalog = await getPageCatalog(tabId).catch(() => ({ items: [] }));
+  const items = catalog.items || [];
+  const activeItem = items.find((item) => item.active);
+  const completedCount = items.filter((item) => item.completed).length + (activeItem && !activeItem.completed ? 1 : 0);
+  const remainingCount = Math.max(0, items.length - completedCount);
+  const completedItem = activeItem || (catalog.lastCompletedTitle ? { title: catalog.lastCompletedTitle } : items.find((item) => item.completed));
   const completedAt = new Date().toLocaleString("zh-CN", {
     dateStyle: "medium",
     timeStyle: "medium"
   });
   const title = tab.title || pageTitle || "当前网页";
   const pageUrl = tab.url || "";
+  const catalogStats = items.length
+    ? `\n完播课时：${completedItem?.title || "当前课时"}\n目录进度：${completedCount} / ${items.length} 已播放\n剩余视频：${remainingCount} 个`
+    : "\n完播课时：当前视频\n目录统计：暂不可用";
   await requestQqMailDelivery({
     subject: "视频播放完成",
-    text: `视频播放完成。\n\n页面：${title}\n链接：${pageUrl}\n完成时间：${completedAt}`
+    text: `视频播放完成。${catalogStats}\n\n页面：${title}\n链接：${pageUrl}\n完成时间：${completedAt}`
   });
 }
 
@@ -664,7 +706,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "GET_PAGE_CATALOG") {
-    return respond(getPageCatalog(message.tabId), sendResponse);
+    return respond(getPageCatalog(message.tabId, message.forceRefresh === true), sendResponse);
   }
 
   if (message.type === "PLAY_CATALOG_ITEM") {
@@ -717,6 +759,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "VIDEO_ENDED" && sender.tab?.id !== undefined) {
     lastPauseAlertTime.delete(sender.tab.id);
+    markCachedCatalogActiveItemCompleted(sender.tab.id);
     sendCompletionReminders(sender.tab.id, message.pageTitle).catch(() => {
       // A delivery failure must not disrupt page-side video monitoring.
     });
@@ -740,6 +783,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function clearSettingsForTopFrame(details) {
   if (details.frameId === 0) {
     lastPauseAlertTime.delete(details.tabId);
+    catalogCache.delete(details.tabId);
     clearTabSettings(details.tabId).catch(() => {});
   }
 }
@@ -751,5 +795,6 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(clearSettingsForTopFrame)
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastPauseAlertTime.delete(tabId);
+  catalogCache.delete(tabId);
   clearTabSettings(tabId).catch(() => {});
 });

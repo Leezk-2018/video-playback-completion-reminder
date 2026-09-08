@@ -213,10 +213,21 @@ body {
 }
 
 .catalog-status {
-  margin: 0;
+  margin: 6px 2px 0;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 16px;
+}
+
+.catalog-stats {
+  display: inline-flex;
+  margin-top: 1px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .catalog-list {
@@ -368,6 +379,33 @@ body {
 
 .select-wrapper {
   position: relative;
+}
+
+.reminder-radios {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reminder-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reminder-radio input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.reminder-radio:has(input:checked) {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 select {
