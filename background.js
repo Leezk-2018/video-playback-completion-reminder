@@ -1,5 +1,6 @@
 const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
+const CATALOG_CACHE_KEY_PREFIX = "catalog-cache:";
 const catalogCache = new Map();
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
@@ -23,6 +24,32 @@ const DEFAULT_REMINDER_SETTINGS = Object.freeze({
 
 function tabSessionKey(tabId) {
   return `${TAB_SESSION_KEY_PREFIX}${tabId}`;
+}
+
+function catalogCacheKey(tabId) {
+  return `${CATALOG_CACHE_KEY_PREFIX}${tabId}`;
+}
+
+async function getCachedCatalog(tabId) {
+  const inMemory = catalogCache.get(tabId);
+  if (inMemory) return inMemory;
+
+  const key = catalogCacheKey(tabId);
+  const stored = await chrome.storage.session.get(key);
+  const cached = stored[key];
+  if (!cached || typeof cached.url !== "string" || !Array.isArray(cached.items)) return null;
+  catalogCache.set(tabId, cached);
+  return cached;
+}
+
+async function saveCachedCatalog(tabId, cached) {
+  catalogCache.set(tabId, cached);
+  await chrome.storage.session.set({ [catalogCacheKey(tabId)]: cached });
+}
+
+async function clearCachedCatalog(tabId) {
+  catalogCache.delete(tabId);
+  await chrome.storage.session.remove(catalogCacheKey(tabId));
 }
 
 function isSupportedUrl(url) {
@@ -297,7 +324,7 @@ async function getPageCatalog(tabId, forceRefresh = false) {
     return { success: false, error: "此页面不支持读取目录。", items: [] };
   }
 
-  const cached = catalogCache.get(tabId);
+  const cached = await getCachedCatalog(tabId);
   if (!forceRefresh && cached?.url === tab.url) {
     return { success: true, items: cached.items, frames: cached.frames, lastCompletedTitle: cached.lastCompletedTitle || "", cached: true };
   }
@@ -321,12 +348,12 @@ async function getPageCatalog(tabId, forceRefresh = false) {
     }
   }
   const result = { success: true, items, frames, cached: false };
-  catalogCache.set(tabId, { url: tab.url, items, frames, lastCompletedTitle: "" });
+  await saveCachedCatalog(tabId, { url: tab.url, items, frames, lastCompletedTitle: "" });
   return result;
 }
 
-function updateCachedCatalogActiveItem(tabId, title) {
-  const cached = catalogCache.get(tabId);
+async function updateCachedCatalogActiveItem(tabId, title) {
+  const cached = await getCachedCatalog(tabId);
   if (!cached || !title) return;
   let found = false;
   cached.items = cached.items.map((item) => {
@@ -336,14 +363,45 @@ function updateCachedCatalogActiveItem(tabId, title) {
     }
     return item.active ? { ...item, active: false } : item;
   });
+  await saveCachedCatalog(tabId, cached);
 }
 
-function markCachedCatalogActiveItemCompleted(tabId) {
-  const cached = catalogCache.get(tabId);
+async function markCachedCatalogActiveItemCompleted(tabId, completedTitle = "") {
+  const cached = await getCachedCatalog(tabId);
   if (!cached) return;
-  cached.items = cached.items.map((item) => item.active
-    ? (cached.lastCompletedTitle = item.title, { ...item, active: false, completed: true, status: "已学完" })
-    : item);
+  const targetTitle = completedTitle || cached.items.find((item) => item.active)?.title || cached.lastCompletedTitle;
+  if (!targetTitle) return;
+  cached.items = cached.items.map((item) => {
+    if (item.title === targetTitle || (item.active && !completedTitle)) {
+      cached.lastCompletedTitle = item.title;
+      return { ...item, active: false, completed: true, status: "已学完" };
+    }
+    return item.active ? { ...item, active: false } : item;
+  });
+  if (!cached.lastCompletedTitle && targetTitle) cached.lastCompletedTitle = targetTitle;
+  await saveCachedCatalog(tabId, cached);
+}
+
+async function getActiveCatalogTitle(tabId) {
+  const findActiveTitle = () => {
+    const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const root = document.querySelector('[class*="index-module_detail-main-r_"]');
+    if (!root) return "";
+    const active = [...root.querySelectorAll(".resource-item")].find((resource) =>
+      resource.classList.contains("resource-item-active") ||
+      resource.querySelector('.status-icon [title="进行中"]')
+    );
+    return normalizeText(active?.querySelector(":scope > div:first-child")?.textContent);
+  };
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: findActiveTitle
+    });
+    return results.find((entry) => entry.result)?.result || "";
+  } catch {
+    return "";
+  }
 }
 
 async function clickCatalogItemInDocument({ title, path } = {}) {
@@ -407,7 +465,7 @@ async function playCatalogItem(tabId, item) {
     args: [item]
   });
   const result = results.find((entry) => entry.result?.success)?.result;
-  if (result?.success) updateCachedCatalogActiveItem(tabId, result.title);
+  if (result?.success) await updateCachedCatalogActiveItem(tabId, result.title);
   return result || {
     success: false,
     error: "未找到对应的视频目录项。"
@@ -470,7 +528,7 @@ async function advanceCatalogPlayback(tabId, skipWatched) {
       args: [{ skipWatched: skipWatched === true }]
     });
     const result = results.find((entry) => entry.result?.success)?.result || { success: false };
-    if (result.success) updateCachedCatalogActiveItem(tabId, result.title);
+    if (result.success) await updateCachedCatalogActiveItem(tabId, result.title);
     return result;
   } finally {
     setTimeout(() => catalogAdvanceLocks.delete(tabId), 1200);
@@ -758,16 +816,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "VIDEO_ENDED" && sender.tab?.id !== undefined) {
-    lastPauseAlertTime.delete(sender.tab.id);
-    markCachedCatalogActiveItemCompleted(sender.tab.id);
-    sendCompletionReminders(sender.tab.id, message.pageTitle).catch(() => {
-      // A delivery failure must not disrupt page-side video monitoring.
-    });
-    getTabSettings(sender.tab.id).then((settings) => {
+    const tabId = sender.tab.id;
+    (async () => {
+      lastPauseAlertTime.delete(tabId);
+      // The popup cache may not have seen the latest active marker. Resolve it
+      // from the page before composing mail statistics, then update the cache.
+      await getPageCatalog(tabId).catch(() => null);
+      const activeTitle = await getActiveCatalogTitle(tabId);
+      await markCachedCatalogActiveItemCompleted(tabId, activeTitle);
+      await sendCompletionReminders(tabId, message.pageTitle);
+      const settings = await getTabSettings(tabId);
       if (settings.enabled && settings.continuousPlay) {
-        return advanceCatalogPlayback(sender.tab.id, settings.skipWatched);
+        await advanceCatalogPlayback(tabId, settings.skipWatched);
       }
-    }).catch(() => {});
+    })().catch(() => {
+      // A delivery or catalog update failure must not disrupt page monitoring.
+    });
   }
 
   if (message.type === "VIDEO_PAUSED" && sender.tab?.id !== undefined) {
@@ -783,7 +847,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function clearSettingsForTopFrame(details) {
   if (details.frameId === 0) {
     lastPauseAlertTime.delete(details.tabId);
-    catalogCache.delete(details.tabId);
+    clearCachedCatalog(details.tabId).catch(() => {});
     clearTabSettings(details.tabId).catch(() => {});
   }
 }
@@ -795,6 +859,6 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(clearSettingsForTopFrame)
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastPauseAlertTime.delete(tabId);
-  catalogCache.delete(tabId);
+  clearCachedCatalog(tabId).catch(() => {});
   clearTabSettings(tabId).catch(() => {});
 });

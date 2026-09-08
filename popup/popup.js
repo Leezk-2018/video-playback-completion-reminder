@@ -468,7 +468,7 @@ authorToggle.addEventListener("click", () => {
 });
 
 copyFeedbackEmailButton.addEventListener("click", async () => {
-  const email = "your@email.com";
+  const email = "leezk2023jj@gmail.com";
   try {
     await navigator.clipboard.writeText(email);
     const detail = copyFeedbackEmailButton.querySelector(".author-link-detail");
