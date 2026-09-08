@@ -2,14 +2,13 @@ const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
-const PLAYBACK_RATES = new Set([1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]);
 const REMINDER_MODES = new Set(["system", "qqmail", "both"]);
 
 const DEFAULT_TAB_SETTINGS = Object.freeze({
   enabled: false,
   playbackRate: 1,
-  continuousPlay: false,
-  skipWatched: false
+  continuousPlay: true,
+  skipWatched: true
 });
 
 const DEFAULT_REMINDER_SETTINGS = Object.freeze({
@@ -36,15 +35,18 @@ function isSupportedUrl(url) {
 
 function normalizePlaybackRate(value) {
   const playbackRate = Number(value);
-  return PLAYBACK_RATES.has(playbackRate) ? playbackRate : 1;
+  if (!Number.isFinite(playbackRate) || playbackRate < 0.1 || playbackRate > 16) {
+    return 1;
+  }
+  return Math.round(playbackRate * 100) / 100;
 }
 
 function normalizeTabSettings(value) {
   return {
     enabled: value?.enabled === true,
     playbackRate: normalizePlaybackRate(value?.playbackRate),
-    continuousPlay: value?.continuousPlay === true,
-    skipWatched: value?.skipWatched === true
+    continuousPlay: value?.continuousPlay !== false,
+    skipWatched: value?.skipWatched !== false
   };
 }
 

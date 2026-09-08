@@ -5,7 +5,6 @@ const detailText = document.querySelector("#detail-text");
 const headerBadge = document.querySelector("#header-badge");
 const toggleButton = document.querySelector("#toggle-button");
 const playbackRateSelect = document.querySelector("#playback-rate");
-const rateChips = document.querySelectorAll(".rate-chip");
 const reminderModeSelect = document.querySelector("#reminder-mode");
 const pauseReminderToggle = document.querySelector("#pause-reminder-toggle");
 const continuousPlayToggle = document.querySelector("#continuous-play-toggle");
@@ -32,7 +31,7 @@ const DEFAULT_REMINDER_SETTINGS = {
 };
 
 let currentTabId = null;
-let currentStatus = { enabled: false, supported: false, playbackRate: 1, continuousPlay: false, skipWatched: false };
+let currentStatus = { enabled: false, supported: false, playbackRate: 1, continuousPlay: true, skipWatched: true };
 let currentReminderSettings = DEFAULT_REMINDER_SETTINGS;
 
 function modeUsesQqMail(mode) {
@@ -55,15 +54,6 @@ function setQqMailBusy(isBusy) {
   pauseReminderToggle.disabled = isBusy;
   saveQqMailSettingsButton.disabled = isBusy;
   testQqMailButton.disabled = isBusy;
-}
-
-function updateRateChips(currentRate, supported) {
-  const normalizedRate = Number(currentRate || 1);
-  rateChips.forEach((chip) => {
-    const chipRate = Number(chip.dataset.rate);
-    chip.classList.toggle("active", chipRate === normalizedRate);
-    chip.disabled = !supported;
-  });
 }
 
 function renderReminderSettings(settings, message) {
@@ -121,7 +111,6 @@ function setStatus(status, detail) {
   playbackRateSelect.disabled = !isSupported;
   continuousPlayToggle.disabled = !isSupported;
   skipWatchedToggle.disabled = !isSupported;
-  updateRateChips(currentRate, isSupported);
 
   if (status.reminderSettings) {
     renderReminderSettings(status.reminderSettings);
@@ -338,7 +327,6 @@ async function applyPlaybackRate(rate) {
     return;
   }
 
-  rateChips.forEach((chip) => (chip.disabled = true));
   playbackRateSelect.disabled = true;
   detailText.textContent = "正在设置播放倍速...";
 
@@ -355,16 +343,13 @@ async function applyPlaybackRate(rate) {
 }
 
 playbackRateSelect.addEventListener("change", () => {
-  applyPlaybackRate(Number(playbackRateSelect.value));
-});
-
-rateChips.forEach((chip) => {
-  chip.addEventListener("click", () => {
-    if (chip.disabled) return;
-    const rate = Number(chip.dataset.rate);
-    playbackRateSelect.value = String(rate);
-    applyPlaybackRate(rate);
-  });
+  const rate = Number(playbackRateSelect.value);
+  if (!Number.isFinite(rate) || rate < 0.1 || rate > 16) {
+    playbackRateSelect.value = String(currentStatus.playbackRate || 1);
+    detailText.textContent = "倍速范围为 0.1x - 16x。";
+    return;
+  }
+  applyPlaybackRate(rate);
 });
 
 reminderModeSelect.addEventListener("change", () => {
