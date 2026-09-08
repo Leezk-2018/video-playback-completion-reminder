@@ -21,6 +21,9 @@ const catalogList = document.querySelector("#catalog-list");
 const catalogStatus = document.querySelector("#catalog-status");
 const catalogStats = document.querySelector("#catalog-stats");
 const refreshCatalogButton = document.querySelector("#refresh-catalog");
+const authorToggle = document.querySelector("#author-toggle");
+const authorPanel = document.querySelector("#author-panel");
+const copyFeedbackEmailButton = document.querySelector("#copy-feedback-email");
 
 const DEFAULT_REMINDER_SETTINGS = {
   mode: "system",
@@ -458,3 +461,25 @@ testQqMailButton.addEventListener("click", async () => {
 renderReminderSettings(DEFAULT_REMINDER_SETTINGS);
 loadStatus().then(loadCatalog);
 refreshCatalogButton.addEventListener("click", () => loadCatalog(true));
+authorToggle.addEventListener("click", () => {
+  const expanded = authorToggle.getAttribute("aria-expanded") === "true";
+  authorToggle.setAttribute("aria-expanded", String(!expanded));
+  authorPanel.hidden = expanded;
+});
+
+copyFeedbackEmailButton.addEventListener("click", async () => {
+  const email = "your@email.com";
+  try {
+    await navigator.clipboard.writeText(email);
+    const detail = copyFeedbackEmailButton.querySelector(".author-link-detail");
+    if (detail) {
+      detail.textContent = "已复制";
+      setTimeout(() => {
+        detail.textContent = email;
+      }, 1600);
+    }
+  } catch {
+    // Clipboard access can be unavailable in some browser contexts; avoid
+    // falling back to mailto so clicking never launches a mail client.
+  }
+});

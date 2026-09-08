@@ -182,6 +182,41 @@
           开始监测
         </button>
       </footer>
+
+      <footer class="info-bar">
+        <button id="author-toggle" class="author-toggle" type="button" aria-expanded="false" aria-controls="author-panel">
+          <span class="author-badge" aria-hidden="true">开发者</span>
+          <span class="author-name">@校长办公室</span>
+          <svg class="author-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+        </button>
+      </footer>
+
+      <section id="author-panel" class="author-panel" hidden aria-label="关于开发者">
+        <div class="author-panel-header">
+          <span class="author-badge author-badge-large" aria-hidden="true">校</span>
+          <div><strong>@校长办公室</strong><span>开发者</span></div>
+        </div>
+        <div class="author-panel-links">
+          <a class="author-panel-link" href="https://github.com/Leezk-2018/video-playback-completion-reminder" target="_blank" rel="noreferrer">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
+            <path d="M12 .6A11.4 11.4 0 0 0 8.4 22.8c.57.1.78-.25.78-.55v-2.16c-3.17.69-3.84-1.34-3.84-1.34-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.33.95.1-.74.4-1.24.72-1.53-2.53-.29-5.2-1.27-5.2-5.64 0-1.24.44-2.25 1.17-3.05-.12-.29-.51-1.45.11-3.02 0 0 .95-.3 3.14 1.16A10.9 10.9 0 0 1 12 5.04c.97 0 1.95.13 2.86.38 2.19-1.46 3.14-1.16 3.14-1.16.62 1.57.23 2.73.11 3.02.73.8 1.17 1.81 1.17 3.05 0 4.38-2.67 5.34-5.21 5.63.41.35.77 1.03.77 2.08v3.08c0 .3.21.65.79.54A11.4 11.4 0 0 0 12 .6Z"></path>
+          </svg>
+          <span>GitHub</span>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6"></path>
+          </svg>
+          </a>
+          <button id="copy-feedback-email" class="author-panel-link author-panel-button" type="button" title="点击复制反馈邮箱">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>
+            <span>意见反馈邮箱</span><span class="author-link-detail">leezk2023jj@gmail.com</span>
+          </button>
+        </div>
+        <div class="coffee-section">
+          <div class="coffee-title">请作者喝咖啡</div>
+          <img class="coffee-qr" src="../icons/donation-qr.svg" alt="微信收款二维码" />
+          <p>微信扫码支持作者</p>
+        </div>
+      </section>
     </main>
 
     <script src="popup.js"></script>

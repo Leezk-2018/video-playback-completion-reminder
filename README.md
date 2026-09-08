@@ -23,7 +23,13 @@
 QQ 邮箱需要使用“授权码”，不能使用 QQ 登录密码。授权码由 QQ 邮箱生成，只用于 SMTP 发信。
 
 1. 在 QQ 邮箱网页中进入“设置 → 账户”，开启 `SMTP/IMAP` 服务并生成授权码。
-2. 在 PowerShell 中运行项目里的 `start-qq-mail-bridge.ps1`。脚本会提示输入发件 QQ 邮箱和授权码，并显示一段连接密钥。
+2. 在项目目录的 PowerShell 中运行以下命令启动 `start-qq-mail-bridge.ps1`：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\start-qq-mail-bridge.ps1
+   ```
+
+   脚本会提示输入发件 QQ 邮箱和授权码，并显示一段连接密钥。
 3. 保持脚本窗口运行，在扩展面板选择“QQ 邮箱提醒”或“系统通知 + QQ 邮箱”。
 4. 将脚本显示的连接密钥填入“桥接服务连接密钥”，收件人填写 QQ 邮箱地址，点击“保存设置”。
 5. 点击“发送测试邮件”确认配置成功。
