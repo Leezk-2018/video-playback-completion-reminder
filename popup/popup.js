@@ -332,7 +332,7 @@ toggleButton.addEventListener("click", async () => {
       tabId: currentTabId,
       enabled: !currentStatus.enabled
     });
-    setStatus(status || { enabled: false, supported: false }, status?.error);
+    setStatus(status || { enabled: false, supported: false }, status?.error || status?.playbackStart);
   } catch {
     setStatus(currentStatus, "更新失败，请重试。");
   }

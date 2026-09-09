@@ -402,12 +402,37 @@ async function getActiveCatalogTitle(tabId) {
 
 async function clickCatalogItemInDocument({ title, path } = {}) {
   const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
-  const waitForPlayback = async () => {
+  const dismissCourseCreditNotice = () => {
+    const hasCourseCreditMessage = (value) => {
+      const text = String(value || "").replace(/\s+/g, "").trim();
+      return text.includes("须学习完课程的视频") && text.includes("才可获得该课程视频的学时");
+    };
+    for (const modal of document.querySelectorAll(".fish-modal-content")) {
+      const message = modal.querySelector(".fish-modal-confirm-content")?.textContent;
+      if (!hasCourseCreditMessage(message)) continue;
+
+      const confirmButton = [...modal.querySelectorAll(".fish-modal-confirm-btns button, .fish-modal-confirm-btns .fish-btn")]
+        .find((button) => normalizeText(button.textContent).includes("我知道了"));
+      if (confirmButton) {
+        confirmButton.click();
+        return true;
+      }
+    }
+    return false;
+  };
+  const waitForPlayback = async (previousVideoSources = new Map()) => {
     const deadline = Date.now() + 8_000;
+    const switchDeadline = Date.now() + 4_000;
     while (Date.now() < deadline) {
+      dismissCourseCreditNotice();
       const videos = [...document.querySelectorAll("video")];
-      const candidates = videos.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
-      for (const video of candidates.length ? candidates : videos) {
+      const switchedVideos = videos.filter((video) => {
+        const previousSource = previousVideoSources.get(video);
+        return previousSource === undefined || previousSource !== (video.currentSrc || video.src);
+      });
+      const pool = switchedVideos.length || Date.now() >= switchDeadline ? switchedVideos.length ? switchedVideos : videos : [];
+      const candidates = pool.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
+      for (const video of candidates) {
         if (video.ended) continue;
         try {
           await video.play();
@@ -417,6 +442,16 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  };
+  const waitForResourceActivation = async (resource) => {
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline) {
+      const active = resource.classList.contains("resource-item-active") ||
+        resource.querySelector('.status-icon [title="进行中"]');
+      if (active) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
     return false;
   };
@@ -432,6 +467,9 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
   }
 
   const resources = [...root.querySelectorAll(".resource-item")];
+  const previousVideoSources = new Map(
+    [...document.querySelectorAll("video")].map((video) => [video, video.currentSrc || video.src])
+  );
   const target = resources.find((resource) => {
     const resourceTitle = normalizeText(resource.querySelector(":scope > div:first-child")?.textContent);
     if (resourceTitle !== title) return false;
@@ -448,8 +486,13 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
   if (!target) return { success: false };
   target.scrollIntoView({ behavior: "smooth", block: "center" });
   target.click();
-  const played = await waitForPlayback();
-  return { success: true, title, played };
+  // The course player switches asynchronously after the catalog click. Wait
+  // for its active marker when available, then leave a short render buffer.
+  await waitForResourceActivation(target);
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  dismissCourseCreditNotice();
+  const played = await waitForPlayback(previousVideoSources);
+  return { success: played, title, played };
 }
 
 async function playCatalogItem(tabId, item) {
@@ -468,13 +511,67 @@ async function playCatalogItem(tabId, item) {
   };
 }
 
+async function startMonitoringPlayback(tabId) {
+  const status = await updateCurrentTabSettings(tabId, { enabled: true });
+  if (!status.success) {
+    return status;
+  }
+  if (!status.skipWatched) {
+    return { ...status, playbackStart: "已尝试播放当前页视频。" };
+  }
+
+  try {
+    // Refresh before choosing so the first unfinished item reflects the page,
+    // rather than a possibly stale popup cache.
+    const catalog = await getPageCatalog(tabId, true);
+    const firstUnwatchedItem = catalog.items?.find((item) => item.completed !== true);
+    if (!firstUnwatchedItem) {
+      return { ...status, playbackStart: "当前目录没有待播放视频，已继续播放当前页视频。" };
+    }
+
+    const result = await playCatalogItem(tabId, firstUnwatchedItem);
+    if (result?.success && result.played) {
+      return { ...status, playbackStart: `已开始播放：${firstUnwatchedItem.title}` };
+    }
+
+    return { ...status, playbackStart: "未能切换目录视频，已继续播放当前页视频。" };
+  } catch {
+    return { ...status, playbackStart: "目录读取失败，已继续播放当前页视频。" };
+  }
+}
+
 async function advanceCatalogInDocument({ skipWatched = false } = {}) {
-  const waitForPlayback = async () => {
+  const dismissCourseCreditNotice = () => {
+    const hasCourseCreditMessage = (value) => {
+      const text = String(value || "").replace(/\s+/g, "").trim();
+      return text.includes("须学习完课程的视频") && text.includes("才可获得该课程视频的学时");
+    };
+    for (const modal of document.querySelectorAll(".fish-modal-content")) {
+      const message = modal.querySelector(".fish-modal-confirm-content")?.textContent;
+      if (!hasCourseCreditMessage(message)) continue;
+
+      const confirmButton = [...modal.querySelectorAll(".fish-modal-confirm-btns button, .fish-modal-confirm-btns .fish-btn")]
+        .find((button) => button.textContent?.replace(/\s+/g, " ").trim().includes("我知道了"));
+      if (confirmButton) {
+        confirmButton.click();
+        return true;
+      }
+    }
+    return false;
+  };
+  const waitForPlayback = async (previousVideoSources = new Map()) => {
     const deadline = Date.now() + 8_000;
+    const switchDeadline = Date.now() + 4_000;
     while (Date.now() < deadline) {
+      dismissCourseCreditNotice();
       const videos = [...document.querySelectorAll("video")];
-      const candidates = videos.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
-      for (const video of candidates.length ? candidates : videos) {
+      const switchedVideos = videos.filter((video) => {
+        const previousSource = previousVideoSources.get(video);
+        return previousSource === undefined || previousSource !== (video.currentSrc || video.src);
+      });
+      const pool = switchedVideos.length || Date.now() >= switchDeadline ? switchedVideos.length ? switchedVideos : videos : [];
+      const candidates = pool.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
+      for (const video of candidates) {
         if (video.ended) continue;
         try {
           await video.play();
@@ -484,6 +581,16 @@ async function advanceCatalogInDocument({ skipWatched = false } = {}) {
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  };
+  const waitForResourceActivation = async (resource) => {
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline) {
+      const active = resource.classList.contains("resource-item-active") ||
+        resource.querySelector('.status-icon [title="进行中"]');
+      if (active) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
     return false;
   };
@@ -497,6 +604,9 @@ async function advanceCatalogInDocument({ skipWatched = false } = {}) {
   }
   const resources = [...root.querySelectorAll(".resource-item")];
   if (!resources.length) return { success: false };
+  const previousVideoSources = new Map(
+    [...document.querySelectorAll("video")].map((video) => [video, video.currentSrc || video.src])
+  );
   const currentIndex = resources.findIndex((resource) =>
     resource.classList.contains("resource-item-active") ||
     resource.querySelector('.status-icon [title="进行中"]')
@@ -509,8 +619,13 @@ async function advanceCatalogInDocument({ skipWatched = false } = {}) {
   if (!target) return { success: false, done: true };
   target.scrollIntoView({ behavior: "smooth", block: "center" });
   target.click();
-  const played = await waitForPlayback();
-  return { success: true, played, title: target.querySelector(":scope > div:first-child")?.textContent?.trim() || "" };
+  // Wait for the asynchronous resource/player switch; otherwise the first
+  // play() attempt can target the previous video's element.
+  await waitForResourceActivation(target);
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  dismissCourseCreditNotice();
+  const played = await waitForPlayback(previousVideoSources);
+  return { success: played, played, title: target.querySelector(":scope > div:first-child")?.textContent?.trim() || "" };
 }
 
 const catalogAdvanceLocks = new Map();
@@ -696,8 +811,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SET_TRACKING") {
+    const operation = message.enabled === true
+      ? startMonitoringPlayback(message.tabId)
+      : updateCurrentTabSettings(message.tabId, { enabled: false });
     return respond(
-      updateCurrentTabSettings(message.tabId, { enabled: message.enabled === true }),
+      operation,
       sendResponse
     );
   }

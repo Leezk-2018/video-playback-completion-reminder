@@ -58,6 +58,24 @@
     }
   }
 
+  function dismissCourseCreditNotice() {
+    const hasCourseCreditMessage = (value) => {
+      const text = String(value || "").replace(/\s+/g, "").trim();
+      return text.includes("须学习完课程的视频") && text.includes("才可获得该课程视频的学时");
+    };
+
+    for (const modal of document.querySelectorAll(".fish-modal-content, [role='dialog']")) {
+      const content = modal.querySelector(".fish-modal-confirm-content") || modal;
+      if (!hasCourseCreditMessage(content.textContent)) continue;
+
+      const button = [...modal.querySelectorAll("button, .fish-btn")]
+        .find((candidate) => String(candidate.textContent || "").replace(/\s+/g, "").trim().includes("我知道了"));
+      if (button) {
+        button.click();
+      }
+    }
+  }
+
   function resumePlayback(video, meta = videoMeta.get(video)) {
     if (!state.monitoringEnabled || video.ended || meta?.completed || !video.paused || isNearEnd(video)) {
       return;
@@ -148,6 +166,7 @@
     }
 
     const element = node;
+    dismissCourseCreditNotice();
     if (element.matches("video")) {
       watchVideo(element);
     }
@@ -190,6 +209,7 @@
       return;
     }
     state.watchedVideos.forEach((video) => resumePlayback(video));
+    dismissCourseCreditNotice();
   }
 
   function startObserving() {
@@ -210,6 +230,7 @@
     });
     document.addEventListener("visibilitychange", handleVisibilityChange, true);
     state.watchedVideos.forEach((video) => resumePlayback(video));
+    dismissCourseCreditNotice();
   }
 
   function applySettings(settings) {
