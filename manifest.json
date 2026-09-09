@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "视频完播提醒",
-  "description": "识别课程目录并管理网页视频播放，支持倍速、连续播放、跳过已看及系统和 QQ 邮箱提醒。",
+  "name": "课程播放助手",
+  "description": "识别课程目录并管理网页视频播放，支持倍速、连续播放、跳过已看、持续播放及系统和 QQ 邮箱提醒。",
   "version": "1.2.0",
   "permissions": [
     "activeTab",
@@ -20,7 +20,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "视频完播提醒",
+    "default_title": "课程播放助手",
     "default_popup": "popup/popup.html"
   },
   "icons": {

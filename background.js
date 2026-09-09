@@ -754,7 +754,7 @@ async function sendQqMailReminder(tabId, pageTitle) {
 
 async function sendTestQqMail() {
   await requestQqMailDelivery({
-    subject: "视频完播提醒 - 测试邮件",
+    subject: "课程播放助手 - 测试邮件",
     text: "QQ 邮箱提醒已经配置成功。之后网页视频播放结束时，您将收到此类提醒。"
   });
   return { success: true };

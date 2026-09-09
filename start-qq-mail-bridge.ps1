@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 Write-Host ''
-Write-Host 'Video Playback Reminder - QQ Mail Bridge' -ForegroundColor Cyan
+Write-Host 'Course Playback Assistant - QQ Mail Bridge' -ForegroundColor Cyan
 Write-Host 'Use the QQ Mail authorization code, not your QQ login password.' -ForegroundColor Yellow
 Write-Host ''
 
