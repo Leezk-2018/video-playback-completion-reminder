@@ -8,7 +8,6 @@
 
   const originalPause = HTMLMediaElement.prototype.pause;
   const originalPlay = HTMLMediaElement.prototype.play;
-  const manuallyPaused = new WeakSet();
   const completedVideos = new WeakSet();
 
   document.addEventListener("ended", (event) => {
@@ -18,19 +17,14 @@
   }, true);
 
   HTMLMediaElement.prototype.play = function (...args) {
-    manuallyPaused.delete(this);
     completedVideos.delete(this);
     return originalPlay.apply(this, args);
   };
 
   HTMLMediaElement.prototype.pause = function (...args) {
     const enabled = document.documentElement?.dataset.videoReminderEnabled === "1";
-    if (!document.hidden) {
-      manuallyPaused.add(this);
-    }
     const shouldKeepPlaying = enabled && document.hidden && this instanceof HTMLVideoElement &&
       !completedVideos.has(this) &&
-      !manuallyPaused.has(this) &&
       !this.ended && !(this.duration > 0 && this.currentTime >= this.duration - 1.5);
 
     if (shouldKeepPlaying) {

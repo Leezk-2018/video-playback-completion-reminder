@@ -7,7 +7,6 @@ const toggleButton = document.querySelector("#toggle-button");
 const playbackRateSelect = document.querySelector("#playback-rate");
 const systemReminderToggle = document.querySelector("#system-reminder-toggle");
 const mailReminderToggle = document.querySelector("#mail-reminder-toggle");
-const pauseReminderToggle = document.querySelector("#pause-reminder-toggle");
 const continuousPlayToggle = document.querySelector("#continuous-play-toggle");
 const skipWatchedToggle = document.querySelector("#skip-watched-toggle");
 const qqMailSettings = document.querySelector("#qq-mail-settings");
@@ -31,8 +30,7 @@ const DEFAULT_REMINDER_SETTINGS = {
     recipient: "",
     bridgeToken: ""
   },
-  qqMailConfigured: false,
-  pauseReminder: true
+  qqMailConfigured: false
 };
 
 let currentTabId = null;
@@ -64,7 +62,6 @@ function isValidEmail(value) {
 function setQqMailBusy(isBusy) {
   systemReminderToggle.disabled = isBusy;
   mailReminderToggle.disabled = isBusy;
-  pauseReminderToggle.disabled = isBusy;
   saveQqMailSettingsButton.disabled = isBusy;
   testQqMailButton.disabled = isBusy;
 }
@@ -78,7 +75,6 @@ function renderReminderSettings(settings, message) {
 
   systemReminderToggle.checked = currentReminderSettings.mode === "system" || currentReminderSettings.mode === "both";
   mailReminderToggle.checked = currentReminderSettings.mode === "qqmail" || currentReminderSettings.mode === "both";
-  pauseReminderToggle.checked = currentReminderSettings.pauseReminder !== false;
   continuousPlayToggle.checked = currentStatus.continuousPlay === true;
   skipWatchedToggle.checked = currentStatus.skipWatched === true;
 
@@ -145,7 +141,7 @@ function setStatus(status, detail) {
     headerBadge.textContent = "监测中";
     headerBadge.className = "header-badge active";
     statusText.textContent = "正在监测此页面的视频";
-    detailText.textContent = detail || "视频结束或异常暂停时将发送提醒。";
+    detailText.textContent = detail || "视频结束时将发送提醒，并保持播放不中断。";
     toggleButton.textContent = "停止监测";
     toggleButton.disabled = false;
     toggleButton.classList.add("stop");
@@ -266,7 +262,6 @@ async function loadCatalog(forceRefresh = false) {
 async function saveReminderSettings(validateQqMailSettings) {
   const mode = selectedReminderMode();
   const formMail = getQqMailSettingsFromForm();
-  const pauseReminder = pauseReminderToggle.checked;
 
   let qqMailToSave;
 
@@ -291,7 +286,7 @@ async function saveReminderSettings(validateQqMailSettings) {
     }
     qqMailToSave = formMail;
   } else {
-    // 切换提醒模式或防挂机开关时，若表单尚未保存，优先保留已存储的有效凭据
+    // 切换提醒模式时，若表单尚未保存，优先保留已存储的有效凭据
     qqMailToSave = (formMail.recipient && formMail.bridgeToken)
       ? formMail
       : currentReminderSettings.qqMail;
@@ -302,8 +297,7 @@ async function saveReminderSettings(validateQqMailSettings) {
     const settings = await chrome.runtime.sendMessage({
       type: "SAVE_REMINDER_SETTINGS",
       mode,
-      qqMail: qqMailToSave,
-      pauseReminder
+      qqMail: qqMailToSave
     });
 
     if (!settings || settings.success === false) {
@@ -381,16 +375,6 @@ function handleReminderModeChange() {
 
 systemReminderToggle.addEventListener("change", handleReminderModeChange);
 mailReminderToggle.addEventListener("change", handleReminderModeChange);
-
-pauseReminderToggle.addEventListener("change", async () => {
-  await saveReminderSettings(false);
-  if (currentTabId !== null && currentStatus.supported && currentStatus.enabled) {
-    chrome.scripting.executeScript({
-      target: { tabId: currentTabId, allFrames: true },
-      files: ["content.js"]
-    }).catch(() => {});
-  }
-});
 
 async function saveCatalogOptions() {
   continuousPlayToggle.disabled = true;

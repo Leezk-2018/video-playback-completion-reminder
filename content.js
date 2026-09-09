@@ -7,17 +7,14 @@
     return;
   }
 
-  const PAUSE_TIMEOUT_MS = 20_000;
-  // Some course sites pause their video when the document becomes hidden.
-  // When monitoring is enabled, immediately resume a video that was already
-  // playing so switching tabs/minimizing the window does not stop playback.
-  const BACKGROUND_RESUME_RETRY_MS = 150;
+  // Keep monitored videos running while monitoring is enabled. A short retry
+  // loop covers players that reject play() while their state is changing.
+  const PLAYBACK_RESUME_RETRY_MS = 500;
   const videoMeta = new WeakMap();
 
   const state = {
     bootstrapSequence: 0,
     monitoringEnabled: false,
-    pauseReminderEnabled: true,
     observer: null,
     playbackRate: 1,
     continuousPlay: false,
@@ -41,19 +38,6 @@
     });
   }
 
-  function reportPause(video) {
-    if (!state.monitoringEnabled || !state.pauseReminderEnabled) {
-      return;
-    }
-
-    chrome.runtime.sendMessage({
-      type: "VIDEO_PAUSED",
-      pageTitle: document.title,
-      currentTime: Math.floor(video.currentTime || 0),
-      duration: Math.floor(video.duration || 0)
-    }).catch(() => {});
-  }
-
   function applyPlaybackRate(video) {
     try {
       video.defaultPlaybackRate = state.playbackRate;
@@ -67,108 +51,50 @@
     return video.ended || (video.duration > 0 && video.currentTime >= video.duration - 1.5);
   }
 
-  function clearPauseTimer(meta) {
-    if (meta?.pauseTimer) {
-      clearTimeout(meta.pauseTimer);
-      meta.pauseTimer = null;
+  function clearResumeRetry(meta) {
+    if (meta?.resumeRetryTimer) {
+      clearTimeout(meta.resumeRetryTimer);
+      meta.resumeRetryTimer = null;
     }
   }
 
-  function resumeInBackground(video, meta = videoMeta.get(video)) {
-    if (!state.monitoringEnabled || !document.hidden || video.ended || meta?.completed || !video.paused) {
+  function resumePlayback(video, meta = videoMeta.get(video)) {
+    if (!state.monitoringEnabled || video.ended || meta?.completed || !video.paused || isNearEnd(video)) {
       return;
     }
 
-    // play() can reject transiently while the site is changing its player
-    // state; a short retry handles that case without creating a polling loop.
     Promise.resolve(video.play()).catch(() => {
-      setTimeout(() => {
-        if (state.monitoringEnabled && document.hidden && video.paused && !video.ended && !meta?.completed) {
-          Promise.resolve(video.play()).catch(() => {});
-        }
-      }, BACKGROUND_RESUME_RETRY_MS);
+      clearResumeRetry(meta);
+      meta.resumeRetryTimer = setTimeout(() => {
+        meta.resumeRetryTimer = null;
+        resumePlayback(video, meta);
+      }, PLAYBACK_RESUME_RETRY_MS);
     });
   }
 
   function handleVideoPlaying(meta) {
-    meta.hasPlayed = true;
-    // Only an explicit subsequent play starts a new playback cycle.
+    // A subsequent play starts a new playback cycle after a completed video.
     meta.completed = false;
-    meta.manuallyPaused = false;
-    meta.alertFired = false;
-    clearPauseTimer(meta);
+    clearResumeRetry(meta);
   }
 
   function handleVideoPause(video, meta) {
-    clearPauseTimer(meta);
-
-    if (!document.hidden) {
-      meta.manuallyPaused = true;
-    }
-
     if (meta.completed) {
       return;
     }
 
-    if (state.monitoringEnabled && document.hidden && !meta.manuallyPaused && meta.hasPlayed && !isNearEnd(video)) {
-      resumeInBackground(video, meta);
-      return;
-    }
-
-    if (meta.manuallyPaused) {
-      return;
-    }
-
-    if (!state.monitoringEnabled || !state.pauseReminderEnabled) {
-      return;
-    }
-
-    // Only alert for videos that were actively played on this page
-    if (!meta.hasPlayed) {
-      return;
-    }
-
-    // Ignore if ended or near end
-    if (isNearEnd(video)) {
-      return;
-    }
-
-    // Ignore tiny or short clips (ads / preview < 10 seconds)
-    if (video.duration > 0 && video.duration < 10) {
-      return;
-    }
-
-    if (meta.alertFired) {
-      return;
-    }
-
-    meta.pauseTimer = setTimeout(() => {
-      meta.pauseTimer = null;
-      if (!state.monitoringEnabled || !state.pauseReminderEnabled) {
-        return;
-      }
-      if (!video.paused || isNearEnd(video) || meta.alertFired) {
-        return;
-      }
-      meta.alertFired = true;
-      reportPause(video);
-    }, PAUSE_TIMEOUT_MS);
+    resumePlayback(video, meta);
   }
 
   function handleVideoEnded(meta) {
-    meta.hasPlayed = false;
     meta.completed = true;
-    meta.alertFired = true;
-    clearPauseTimer(meta);
+    clearResumeRetry(meta);
     reportCompletion();
   }
 
   function handleVideoTimeUpdate(video, meta) {
-    if (!video.paused && video.currentTime > 0) {
-      meta.hasPlayed = true;
-    }
     if (isNearEnd(video)) {
-      clearPauseTimer(meta);
+      clearResumeRetry(meta);
     }
   }
 
@@ -179,11 +105,8 @@
     }
 
     const meta = {
-      pauseTimer: null,
-      hasPlayed: !video.paused && video.currentTime > 0,
-      manuallyPaused: false,
+      resumeRetryTimer: null,
       completed: video.ended,
-      alertFired: false,
       onEnded: () => handleVideoEnded(meta),
       onPlaying: () => handleVideoPlaying(meta),
       onPause: () => handleVideoPause(video, meta),
@@ -209,7 +132,7 @@
 
     const meta = videoMeta.get(video);
     if (meta) {
-      clearPauseTimer(meta);
+      clearResumeRetry(meta);
       video.removeEventListener("ended", meta.onEnded);
       video.removeEventListener("playing", meta.onPlaying);
       video.removeEventListener("play", meta.onPlaying);
@@ -249,7 +172,7 @@
     for (const video of state.watchedVideos) {
       const meta = videoMeta.get(video);
       if (meta) {
-        clearPauseTimer(meta);
+        clearResumeRetry(meta);
         video.removeEventListener("ended", meta.onEnded);
         video.removeEventListener("playing", meta.onPlaying);
         video.removeEventListener("play", meta.onPlaying);
@@ -266,7 +189,7 @@
     if (!state.monitoringEnabled || !document.hidden) {
       return;
     }
-    state.watchedVideos.forEach((video) => resumeInBackground(video));
+    state.watchedVideos.forEach((video) => resumePlayback(video));
   }
 
   function startObserving() {
@@ -286,7 +209,7 @@
       subtree: true
     });
     document.addEventListener("visibilitychange", handleVisibilityChange, true);
-    handleVisibilityChange();
+    state.watchedVideos.forEach((video) => resumePlayback(video));
   }
 
   function applySettings(settings) {
@@ -294,15 +217,8 @@
     state.playbackRate = Number(settings?.playbackRate) || 1;
     state.continuousPlay = settings?.continuousPlay === true;
     state.skipWatched = settings?.skipWatched === true;
-    state.pauseReminderEnabled = settings?.pauseReminder !== false;
     if (document.documentElement) {
       document.documentElement.dataset.videoReminderEnabled = state.monitoringEnabled ? "1" : "0";
-    }
-
-    if (!state.pauseReminderEnabled) {
-      for (const video of state.watchedVideos) {
-        clearPauseTimer(videoMeta.get(video));
-      }
     }
 
     if (state.monitoringEnabled || state.playbackRate !== 1) {
@@ -326,7 +242,7 @@
         applySettings(settings);
       }
     } catch {
-      applySettings({ enabled: false, playbackRate: 1, pauseReminder: false });
+      applySettings({ enabled: false, playbackRate: 1 });
     }
   }
 
