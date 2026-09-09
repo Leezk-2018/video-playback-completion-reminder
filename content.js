@@ -58,13 +58,21 @@
     }
   }
 
-  function dismissCourseCreditNotice() {
+  function dismissCourseCreditNotice(root = document) {
+    if (!state.monitoringEnabled) return;
+
     const hasCourseCreditMessage = (value) => {
       const text = String(value || "").replace(/\s+/g, "").trim();
       return text.includes("须学习完课程的视频") && text.includes("才可获得该课程视频的学时");
     };
 
-    for (const modal of document.querySelectorAll(".fish-modal-content, [role='dialog']")) {
+    const modals = [];
+    if (root.matches?.(".fish-modal-content, [role='dialog']")) {
+      modals.push(root);
+    }
+    modals.push(...(root.querySelectorAll?.(".fish-modal-content, [role='dialog']") || []));
+
+    for (const modal of modals) {
       const content = modal.querySelector(".fish-modal-confirm-content") || modal;
       if (!hasCourseCreditMessage(content.textContent)) continue;
 
@@ -77,17 +85,29 @@
   }
 
   function resumePlayback(video, meta = videoMeta.get(video)) {
-    if (!state.monitoringEnabled || video.ended || meta?.completed || !video.paused || isNearEnd(video)) {
+    if (!state.monitoringEnabled || video.ended || meta?.completed || meta?.resumePending || !video.paused || isNearEnd(video)) {
       return;
     }
 
-    Promise.resolve(video.play()).catch(() => {
-      clearResumeRetry(meta);
-      meta.resumeRetryTimer = setTimeout(() => {
-        meta.resumeRetryTimer = null;
-        resumePlayback(video, meta);
-      }, PLAYBACK_RESUME_RETRY_MS);
-    });
+    meta.resumePending = true;
+    Promise.resolve()
+      .then(() => video.play())
+      .catch(() => {
+        clearResumeRetry(meta);
+        meta.resumeRetryTimer = setTimeout(() => {
+          meta.resumeRetryTimer = null;
+          resumePlayback(video, meta);
+        }, PLAYBACK_RESUME_RETRY_MS);
+      })
+      .finally(() => {
+        meta.resumePending = false;
+        if (state.monitoringEnabled && video.paused && !video.ended && !isNearEnd(video) && !meta.resumeRetryTimer) {
+          meta.resumeRetryTimer = setTimeout(() => {
+            meta.resumeRetryTimer = null;
+            resumePlayback(video, meta);
+          }, PLAYBACK_RESUME_RETRY_MS);
+        }
+      });
   }
 
   function handleVideoPlaying(meta) {
@@ -110,12 +130,6 @@
     reportCompletion();
   }
 
-  function handleVideoTimeUpdate(video, meta) {
-    if (isNearEnd(video)) {
-      clearResumeRetry(meta);
-    }
-  }
-
   function watchVideo(video) {
     if (state.watchedVideos.has(video)) {
       applyPlaybackRate(video);
@@ -124,11 +138,11 @@
 
     const meta = {
       resumeRetryTimer: null,
+      resumePending: false,
       completed: video.ended,
       onEnded: () => handleVideoEnded(meta),
       onPlaying: () => handleVideoPlaying(meta),
-      onPause: () => handleVideoPause(video, meta),
-      onTimeUpdate: () => handleVideoTimeUpdate(video, meta)
+      onPause: () => handleVideoPause(video, meta)
     };
 
     videoMeta.set(video, meta);
@@ -137,10 +151,13 @@
     video.addEventListener("playing", meta.onPlaying);
     video.addEventListener("play", meta.onPlaying);
     video.addEventListener("pause", meta.onPause);
-    video.addEventListener("timeupdate", meta.onTimeUpdate);
 
     state.watchedVideos.add(video);
     applyPlaybackRate(video);
+    // Course players often replace the video element after a catalog click.
+    // Start the new element immediately instead of waiting for the popup to
+    // close or for another visibility event to trigger recovery.
+    resumePlayback(video, meta);
   }
 
   function unwatchVideo(video) {
@@ -155,7 +172,6 @@
       video.removeEventListener("playing", meta.onPlaying);
       video.removeEventListener("play", meta.onPlaying);
       video.removeEventListener("pause", meta.onPause);
-      video.removeEventListener("timeupdate", meta.onTimeUpdate);
       videoMeta.delete(video);
     }
   }
@@ -166,7 +182,7 @@
     }
 
     const element = node;
-    dismissCourseCreditNotice();
+    dismissCourseCreditNotice(element);
     if (element.matches("video")) {
       watchVideo(element);
     }
@@ -196,7 +212,6 @@
         video.removeEventListener("playing", meta.onPlaying);
         video.removeEventListener("play", meta.onPlaying);
         video.removeEventListener("pause", meta.onPause);
-        video.removeEventListener("timeupdate", meta.onTimeUpdate);
         videoMeta.delete(video);
       }
     }
