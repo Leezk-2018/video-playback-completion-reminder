@@ -51,12 +51,15 @@
       <!-- 提醒偏好设置卡片 -->
       <section class="card">
         <div class="card-row">
-          <div class="card-title">
-            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polygon points="10 8 16 12 10 16 10 8"></polygon>
-            </svg>
-            <label for="playback-rate">播放倍速</label>
+          <div class="switch-meta">
+            <div class="card-title">
+              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polygon points="10 8 16 12 10 16 10 8"></polygon>
+              </svg>
+              <label for="playback-rate">播放倍速</label>
+            </div>
+            <p class="switch-subtext">请选择合理倍速避免触发错误弹窗</p>
           </div>
           <div class="rate-input-wrap">
             <input id="playback-rate" class="rate-input" type="number" min="0.1" max="16" step="0.05" value="1" inputmode="decimal" aria-label="播放倍速" disabled />
@@ -67,12 +70,15 @@
         <div class="card-divider"></div>
 
         <div class="card-row">
-          <div class="card-title">
-            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-            </svg>
-            <span>提醒方式</span>
+          <div class="switch-meta">
+            <div class="card-title">
+              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+              <span>提醒方式</span>
+            </div>
+            <p class="switch-subtext">视频播放完成后发送提醒</p>
           </div>
           <div id="reminder-mode" class="reminder-radios" role="group" aria-label="提醒方式">
             <label class="reminder-radio"><input id="system-reminder-toggle" type="checkbox" checked /><span>系统提醒</span></label>
