@@ -236,6 +236,12 @@ body {
   margin-bottom: 5px;
 }
 
+.catalog-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .catalog-refresh {
   border: 0;
   padding: 3px 7px;

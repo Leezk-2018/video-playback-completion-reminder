@@ -25,14 +25,24 @@
 
   globalThis[STATE_KEY] = state;
 
-  function reportCompletion() {
+  function reportCompletion(video) {
     if (!state.monitoringEnabled) {
       return;
     }
 
+    const videoState = {
+      currentSrc: video?.currentSrc || video?.src || "",
+      currentTime: Number(video?.currentTime) || 0,
+      duration: Number(video?.duration) || 0,
+      ended: video?.ended === true,
+      paused: video?.paused === true,
+      playbackRate: Number(video?.playbackRate) || 1,
+      frameUrl: location.href
+    };
     chrome.runtime.sendMessage({
       type: "VIDEO_ENDED",
-      pageTitle: document.title
+      pageTitle: document.title,
+      video: videoState
     }).catch(() => {
       // The background worker can be unavailable briefly during page teardown.
     });
@@ -124,10 +134,10 @@
     resumePlayback(video, meta);
   }
 
-  function handleVideoEnded(meta) {
+  function handleVideoEnded(video, meta) {
     meta.completed = true;
     clearResumeRetry(meta);
-    reportCompletion();
+    reportCompletion(video);
   }
 
   function watchVideo(video) {
@@ -140,7 +150,7 @@
       resumeRetryTimer: null,
       resumePending: false,
       completed: video.ended,
-      onEnded: () => handleVideoEnded(meta),
+      onEnded: () => handleVideoEnded(video, meta),
       onPlaying: () => handleVideoPlaying(meta),
       onPause: () => handleVideoPause(video, meta)
     };

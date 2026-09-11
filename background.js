@@ -1,6 +1,10 @@
 const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
 const CATALOG_CACHE_KEY_PREFIX = "catalog-cache:";
+const CATALOG_CACHE_VERSION = 3;
+const PLAYBACK_DEBUG_KEY_PREFIX = "playback-debug:";
+const PLAYBACK_DEBUG_EVENT_PREFIX = "PLAYBACK_DEBUG:";
+const PLAYBACK_DEBUG_LIMIT = 200;
 const catalogCache = new Map();
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
@@ -27,6 +31,83 @@ function tabSessionKey(tabId) {
 
 function catalogCacheKey(tabId) {
   return `${CATALOG_CACHE_KEY_PREFIX}${tabId}`;
+}
+
+function playbackDebugKey(tabId) {
+  return `${PLAYBACK_DEBUG_KEY_PREFIX}${tabId}`;
+}
+
+async function appendPlaybackDebugLog(tabId, event, details = {}) {
+  if (!Number.isInteger(tabId)) return;
+  const entry = {
+    time: new Date().toISOString(),
+    event: `${PLAYBACK_DEBUG_EVENT_PREFIX}${event}`,
+    details
+  };
+
+  try {
+    const key = playbackDebugKey(tabId);
+    const stored = await chrome.storage.session.get(key);
+    const entries = Array.isArray(stored[key]) ? stored[key] : [];
+    entries.push(entry);
+    await chrome.storage.session.set({ [key]: entries.slice(-PLAYBACK_DEBUG_LIMIT) });
+  } catch {
+    // Diagnostics must never interrupt completion or continuous playback.
+  }
+}
+
+async function getPlaybackDebugLog(tabId) {
+  const key = playbackDebugKey(tabId);
+  const stored = await chrome.storage.session.get(key);
+  const entries = Array.isArray(stored[key]) ? stored[key] : [];
+  return {
+    success: true,
+    text: JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      tabId,
+      entries
+    }, null, 2)
+  };
+}
+
+async function clearPlaybackDebugLog(tabId) {
+  await chrome.storage.session.remove(playbackDebugKey(tabId));
+}
+
+function summarizeCatalog(items = [], startOrder = 1) {
+  return items.map((item, index) => ({
+    order: startOrder + index,
+    title: item.title,
+    path: item.path || [],
+    status: item.status || "",
+    active: item.active === true,
+    completed: item.completed === true,
+    frameId: item.frameId
+  }));
+}
+
+function summarizeCatalogWindow(items = [], centerIndex = -1, radius = 2) {
+  if (!items.length) return [];
+  const safeCenter = centerIndex >= 0 ? centerIndex : 0;
+  const start = Math.max(0, safeCenter - radius);
+  const end = Math.min(items.length, safeCenter + radius + 1);
+  return summarizeCatalog(items.slice(start, end), start + 1);
+}
+
+function summarizeActiveCatalogItems(items = []) {
+  return items.flatMap((item, index) =>
+    item.active ? summarizeCatalog([item], index + 1) : []
+  );
+}
+
+function sanitizeDebugUrl(value) {
+  if (typeof value === "string" && value.startsWith("blob:")) return "blob:[redacted]";
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return typeof value === "string" && value.startsWith("blob:") ? "blob:[redacted]" : "";
+  }
 }
 
 async function getCachedCatalog(tabId) {
@@ -321,7 +402,7 @@ async function getPageCatalog(tabId, forceRefresh = false) {
   }
 
   const cached = await getCachedCatalog(tabId);
-  if (!forceRefresh && cached?.url === tab.url) {
+  if (!forceRefresh && cached?.url === tab.url && cached.version === CATALOG_CACHE_VERSION) {
     return { success: true, items: cached.items, frames: cached.frames, lastCompletedTitle: cached.lastCompletedTitle || "", cached: true };
   }
 
@@ -344,16 +425,29 @@ async function getPageCatalog(tabId, forceRefresh = false) {
     }
   }
   const result = { success: true, items, frames, cached: false };
-  await saveCachedCatalog(tabId, { url: tab.url, items, frames, lastCompletedTitle: "" });
+  await saveCachedCatalog(tabId, {
+    version: CATALOG_CACHE_VERSION,
+    url: tab.url,
+    items,
+    frames,
+    lastCompletedTitle: ""
+  });
   return result;
 }
 
-async function updateCachedCatalogActiveItem(tabId, title) {
+function catalogItemMatches(left, right) {
+  if (!left || !right || left.title !== right.title) return false;
+  const leftPath = Array.isArray(left.path) ? left.path : [];
+  const rightPath = Array.isArray(right.path) ? right.path : [];
+  return leftPath.length === rightPath.length && leftPath.every((part, index) => part === rightPath[index]);
+}
+
+async function updateCachedCatalogActiveItem(tabId, activeItem) {
   const cached = await getCachedCatalog(tabId);
-  if (!cached || !title) return;
+  if (!cached || !activeItem?.title) return;
   let found = false;
   cached.items = cached.items.map((item) => {
-    if (item.title === title && !found) {
+    if (catalogItemMatches(item, activeItem) && !found) {
       found = true;
       return { ...item, active: true };
     }
@@ -364,18 +458,39 @@ async function updateCachedCatalogActiveItem(tabId, title) {
 
 async function markCachedCatalogActiveItemCompleted(tabId, completedTitle = "") {
   const cached = await getCachedCatalog(tabId);
-  if (!cached) return;
-  const targetTitle = completedTitle || cached.items.find((item) => item.active)?.title || cached.lastCompletedTitle;
-  if (!targetTitle) return;
+  if (!cached) return null;
+  const matchingActiveItem = cached.items.find((item) =>
+    item.active && item.title === completedTitle
+  );
+  const pageTitleItem = cached.items.find((item) => item.title === completedTitle);
+  const activeItem = cached.items.find((item) => item.active);
+  const lastCompletedItem = cached.items.find((item) => item.title === cached.lastCompletedTitle);
+  // Manual navigation can leave an older item active in the cache. Prefer the
+  // page's explicit active marker, then fall back to cached state.
+  const targetItem = matchingActiveItem || pageTitleItem || activeItem || lastCompletedItem;
+  if (!targetItem) return null;
+  const catalogIndex = cached.items.indexOf(targetItem);
   cached.items = cached.items.map((item) => {
-    if (item.title === targetTitle || (item.active && !completedTitle)) {
+    if (item === targetItem) {
       cached.lastCompletedTitle = item.title;
       return { ...item, active: false, completed: true, status: "已学完" };
     }
     return item.active ? { ...item, active: false } : item;
   });
-  if (!cached.lastCompletedTitle && targetTitle) cached.lastCompletedTitle = targetTitle;
+  if (!cached.lastCompletedTitle) cached.lastCompletedTitle = targetItem.title;
   await saveCachedCatalog(tabId, cached);
+  return {
+    title: targetItem.title,
+    path: targetItem.path || [],
+    catalogIndex,
+    matchSource: matchingActiveItem
+      ? "page-and-cache-active"
+      : pageTitleItem
+        ? "page-active-title"
+        : activeItem
+          ? "cached-active-fallback"
+          : "last-completed-title"
+  };
 }
 
 async function getActiveCatalogTitle(tabId) {
@@ -383,10 +498,11 @@ async function getActiveCatalogTitle(tabId) {
     const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
     const root = document.querySelector('[class*="index-module_detail-main-r_"]');
     if (!root) return "";
-    const active = [...root.querySelectorAll(".resource-item")].find((resource) =>
-      resource.classList.contains("resource-item-active") ||
-      resource.querySelector('.status-icon [title="进行中"]')
-    );
+    const resources = [...root.querySelectorAll(".resource-item")];
+    // The previous lesson can retain its "进行中" status after another item
+    // becomes selected. The explicit active class is the authoritative marker.
+    const active = resources.find((resource) => resource.classList.contains("resource-item-active")) ||
+      resources.find((resource) => resource.querySelector('.status-icon [title="进行中"]'));
     return normalizeText(active?.querySelector(":scope > div:first-child")?.textContent);
   };
   try {
@@ -420,11 +536,12 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
     }
     return false;
   };
-  const waitForPlayback = async (previousVideoSources = new Map()) => {
+  const waitForPlayback = async (previousVideoSources = new Map(), isTargetActive = () => true) => {
     const deadline = Date.now() + 8_000;
     const switchDeadline = Date.now() + 4_000;
     while (Date.now() < deadline) {
       dismissCourseCreditNotice();
+      if (!isTargetActive()) return false;
       const videos = [...document.querySelectorAll("video")];
       const switchedVideos = videos.filter((video) => {
         const previousSource = previousVideoSources.get(video);
@@ -456,7 +573,7 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
     return false;
   };
   const root = document.querySelector('[class*="index-module_detail-main-r_"]');
-  if (!root || !title) return { success: false };
+  if (!root || !title) return { success: false, reason: !root ? "catalog-root-not-found" : "title-missing" };
 
   // 目录是懒渲染的，点击前展开全部层级，确保目标资源已挂载。
   for (let level = 0; level < 12; level += 1) {
@@ -483,31 +600,102 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
     return path.every((part, index) => headers[index] === part);
   });
 
-  if (!target) return { success: false };
+  if (!target) {
+    return {
+      success: false,
+      reason: "catalog-item-not-found",
+      requestedTitle: title,
+      requestedPath: path || [],
+      resourceCount: resources.length,
+      resourceTitles: resources.map((resource) =>
+        normalizeText(resource.querySelector(":scope > div:first-child")?.textContent)
+      )
+    };
+  }
   target.scrollIntoView({ behavior: "smooth", block: "center" });
   target.click();
   // The course player switches asynchronously after the catalog click. Wait
   // for its active marker when available, then leave a short render buffer.
-  await waitForResourceActivation(target);
+  const activated = await waitForResourceActivation(target);
   await new Promise((resolve) => setTimeout(resolve, 1_200));
   dismissCourseCreditNotice();
-  const played = await waitForPlayback(previousVideoSources);
-  return { success: played, title, played };
+  const hasExplicitActiveItem = () => resources.some((resource) =>
+    resource.classList.contains("resource-item-active")
+  );
+  const isTargetActive = () => target.classList.contains("resource-item-active") ||
+    (!hasExplicitActiveItem() && Boolean(target.querySelector('.status-icon [title="进行中"]')));
+  const played = await waitForPlayback(previousVideoSources, isTargetActive);
+  const targetActive = isTargetActive();
+  return {
+    success: played && targetActive,
+    title,
+    played,
+    activated,
+    targetActive,
+    matchedResourceIndex: resources.indexOf(target),
+    resourceCount: resources.length
+  };
 }
 
 async function playCatalogItem(tabId, item) {
   const tab = await chrome.tabs.get(tabId);
   if (!isSupportedUrl(tab.url)) return { success: false, error: "此页面不支持播放目录视频。" };
+  const attempts = [];
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: clickCatalogItemInDocument,
+      args: [item]
+    });
+    attempts.push({
+      attempt,
+      frameResults: results.map((entry) => ({ frameId: entry.frameId, result: entry.result || null }))
+    });
+    const result = results.find((entry) => entry.result?.success)?.result;
+    if (result?.success) {
+      await updateCachedCatalogActiveItem(tabId, item);
+      return { ...result, attempt };
+    }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return {
+    success: false,
+    error: "未找到对应的视频目录项。",
+    attempts
+  };
+}
+
+// Start the video already shown on the page when catalog skipping is disabled.
+// The content script also resumes videos, but that bootstrap is asynchronous;
+// doing this explicitly avoids a race immediately after enabling monitoring.
+async function playCurrentPageVideos(tabId) {
+  const playVideosInDocument = async () => {
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+      const videos = [...document.querySelectorAll("video")];
+      const candidates = videos.filter((video) =>
+        !video.ended && (video.readyState >= 2 || video.duration > 0)
+      );
+      for (const video of candidates) {
+        try {
+          await video.play();
+          return { success: true, videoCount: videos.length };
+        } catch {
+          // Retry while the player is loading or switching sources.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return { success: false, videoCount: document.querySelectorAll("video").length };
+  };
+
   const results = await chrome.scripting.executeScript({
     target: { tabId, allFrames: true },
-    func: clickCatalogItemInDocument,
-    args: [item]
+    func: playVideosInDocument
   });
-  const result = results.find((entry) => entry.result?.success)?.result;
-  if (result?.success) await updateCachedCatalogActiveItem(tabId, result.title);
-  return result || {
+  return results.find((entry) => entry.result?.success)?.result || {
     success: false,
-    error: "未找到对应的视频目录项。"
+    videoCount: results.reduce((count, entry) => count + (entry.result?.videoCount || 0), 0)
   };
 }
 
@@ -517,7 +705,11 @@ async function startMonitoringPlayback(tabId) {
     return status;
   }
   if (!status.skipWatched) {
-    return { ...status, playbackStart: "已尝试播放当前页视频。" };
+    const playback = await playCurrentPageVideos(tabId).catch(() => ({ success: false }));
+    return {
+      ...status,
+      playbackStart: playback.success ? "已开始播放当前页视频。" : "未能自动播放当前页视频，请手动点击播放。"
+    };
   }
 
   try {
@@ -540,107 +732,74 @@ async function startMonitoringPlayback(tabId) {
   }
 }
 
-async function advanceCatalogInDocument({ skipWatched = false } = {}) {
-  const dismissCourseCreditNotice = () => {
-    const hasCourseCreditMessage = (value) => {
-      const text = String(value || "").replace(/\s+/g, "").trim();
-      return text.includes("须学习完课程的视频") && text.includes("才可获得该课程视频的学时");
-    };
-    for (const modal of document.querySelectorAll(".fish-modal-content")) {
-      const message = modal.querySelector(".fish-modal-confirm-content")?.textContent;
-      if (!hasCourseCreditMessage(message)) continue;
-
-      const confirmButton = [...modal.querySelectorAll(".fish-modal-confirm-btns button, .fish-modal-confirm-btns .fish-btn")]
-        .find((button) => button.textContent?.replace(/\s+/g, " ").trim().includes("我知道了"));
-      if (confirmButton) {
-        confirmButton.click();
-        return true;
-      }
-    }
-    return false;
-  };
-  const waitForPlayback = async (previousVideoSources = new Map()) => {
-    const deadline = Date.now() + 8_000;
-    const switchDeadline = Date.now() + 4_000;
-    while (Date.now() < deadline) {
-      dismissCourseCreditNotice();
-      const videos = [...document.querySelectorAll("video")];
-      const switchedVideos = videos.filter((video) => {
-        const previousSource = previousVideoSources.get(video);
-        return previousSource === undefined || previousSource !== (video.currentSrc || video.src);
-      });
-      const pool = switchedVideos.length || Date.now() >= switchDeadline ? switchedVideos.length ? switchedVideos : videos : [];
-      const candidates = pool.filter((video) => !video.ended && (video.readyState >= 2 || video.duration > 0));
-      for (const video of candidates) {
-        if (video.ended) continue;
-        try {
-          await video.play();
-          return true;
-        } catch {
-          // Player may still be loading; retry after a short delay.
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return false;
-  };
-  const waitForResourceActivation = async (resource) => {
-    const deadline = Date.now() + 4_000;
-    while (Date.now() < deadline) {
-      const active = resource.classList.contains("resource-item-active") ||
-        resource.querySelector('.status-icon [title="进行中"]');
-      if (active) return true;
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    }
-    return false;
-  };
-  const root = document.querySelector('[class*="index-module_detail-main-r_"]');
-  if (!root) return { success: false };
-  for (let level = 0; level < 12; level += 1) {
-    const collapsed = [...root.querySelectorAll('.fish-collapse-header[aria-expanded="false"]')];
-    if (!collapsed.length) break;
-    collapsed.forEach((header) => header.click());
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  const resources = [...root.querySelectorAll(".resource-item")];
-  if (!resources.length) return { success: false };
-  const previousVideoSources = new Map(
-    [...document.querySelectorAll("video")].map((video) => [video, video.currentSrc || video.src])
-  );
-  const currentIndex = resources.findIndex((resource) =>
-    resource.classList.contains("resource-item-active") ||
-    resource.querySelector('.status-icon [title="进行中"]')
-  );
-  const start = currentIndex >= 0 ? currentIndex + 1 : 0;
-  const target = resources.slice(start).find((resource) => {
-    const status = resource.querySelector(".status-icon [title]")?.getAttribute("title") || "";
-    return !skipWatched || status !== "已学完";
-  });
-  if (!target) return { success: false, done: true };
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
-  target.click();
-  // Wait for the asynchronous resource/player switch; otherwise the first
-  // play() attempt can target the previous video's element.
-  await waitForResourceActivation(target);
-  await new Promise((resolve) => setTimeout(resolve, 1_200));
-  dismissCourseCreditNotice();
-  const played = await waitForPlayback(previousVideoSources);
-  return { success: played, played, title: target.querySelector(":scope > div:first-child")?.textContent?.trim() || "" };
-}
-
 const catalogAdvanceLocks = new Map();
-async function advanceCatalogPlayback(tabId, skipWatched) {
-  if (catalogAdvanceLocks.get(tabId)) return { success: false, locked: true };
+async function advanceCatalogPlayback(tabId, skipWatched, completedItem = null) {
+  if (catalogAdvanceLocks.get(tabId)) {
+    await appendPlaybackDebugLog(tabId, "advance-skipped-locked");
+    return { success: false, locked: true };
+  }
   catalogAdvanceLocks.set(tabId, true);
   try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      func: advanceCatalogInDocument,
-      args: [{ skipWatched: skipWatched === true }]
+    const cached = await getCachedCatalog(tabId);
+    if (!cached?.items?.length) {
+      await appendPlaybackDebugLog(tabId, "advance-no-catalog");
+      return { success: false };
+    }
+
+    const currentIndex = Number.isInteger(completedItem?.catalogIndex)
+      ? completedItem.catalogIndex
+      : cached.items.findIndex((item) => item.active);
+    if (currentIndex < 0) {
+      await appendPlaybackDebugLog(tabId, "advance-current-item-not-found", {
+        completedItem,
+        catalogSize: cached.items.length,
+        activeItems: summarizeActiveCatalogItems(cached.items)
+      });
+      return { success: false };
+    }
+
+    const candidates = cached.items.slice(currentIndex + 1);
+    const nextItem = candidates.find((item) =>
+      skipWatched !== true || item.completed !== true
+    );
+    const selectedIndex = nextItem ? cached.items.indexOf(nextItem) : -1;
+    const selectedOrder = selectedIndex >= 0 ? selectedIndex + 1 : null;
+    await appendPlaybackDebugLog(tabId, "advance-decision", {
+      skipWatched: skipWatched === true,
+      completedItem,
+      currentOrder: currentIndex + 1,
+      catalogSize: cached.items.length,
+      candidateCount: candidates.length,
+      nearbyItems: summarizeCatalogWindow(cached.items, currentIndex, 3),
+      selectedOrder,
+      selectedItem: nextItem ? summarizeCatalog([nextItem], selectedOrder)[0] : null
     });
-    const result = results.find((entry) => entry.result?.success)?.result || { success: false };
-    if (result.success) await updateCachedCatalogActiveItem(tabId, result.title);
+    if (!nextItem) return { success: false, done: true };
+
+    const result = await playCatalogItem(tabId, nextItem);
+    await appendPlaybackDebugLog(tabId, "advance-play-result", {
+      requestedOrder: selectedOrder,
+      requestedItem: summarizeCatalog([nextItem], selectedOrder)[0],
+      result
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const finalActiveTitle = await getActiveCatalogTitle(tabId);
+    const finalCatalog = await getCachedCatalog(tabId);
+    const finalActiveIndex = finalCatalog?.items?.findIndex((item) => item.active) ?? -1;
+    await appendPlaybackDebugLog(tabId, "advance-final-state", {
+      requestedOrder: selectedOrder,
+      requestedTitle: nextItem.title,
+      pageActiveTitle: finalActiveTitle,
+      cachedActiveOrder: finalActiveIndex >= 0 ? finalActiveIndex + 1 : null,
+      cachedActiveTitle: finalActiveIndex >= 0 ? finalCatalog.items[finalActiveIndex].title : "",
+      pageMatchesRequested: finalActiveTitle === nextItem.title
+    });
     return result;
+  } catch (error) {
+    await appendPlaybackDebugLog(tabId, "advance-error", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
   } finally {
     setTimeout(() => catalogAdvanceLocks.delete(tabId), 1200);
   }
@@ -806,6 +965,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return respond(getPageCatalog(message.tabId, message.forceRefresh === true), sendResponse);
   }
 
+  if (message.type === "GET_PLAYBACK_DEBUG_LOG") {
+    return respond(getPlaybackDebugLog(message.tabId), sendResponse);
+  }
+
   if (message.type === "PLAY_CATALOG_ITEM") {
     return respond(playCatalogItem(message.tabId, message.item), sendResponse);
   }
@@ -859,18 +1022,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "VIDEO_ENDED" && sender.tab?.id !== undefined) {
     const tabId = sender.tab.id;
     (async () => {
+      await appendPlaybackDebugLog(tabId, "video-ended-received", {
+        pageTitle: message.pageTitle || "",
+        senderFrameId: sender.frameId,
+        senderUrl: sanitizeDebugUrl(sender.url || ""),
+        video: message.video ? {
+          ...message.video,
+          currentSrc: sanitizeDebugUrl(message.video.currentSrc),
+          frameUrl: sanitizeDebugUrl(message.video.frameUrl)
+        } : null
+      });
       // The popup cache may not have seen the latest active marker. Resolve it
       // from the page before composing mail statistics, then update the cache.
-      await getPageCatalog(tabId).catch(() => null);
+      const catalog = await getPageCatalog(tabId).catch(() => null);
       const activeTitle = await getActiveCatalogTitle(tabId);
-      await markCachedCatalogActiveItemCompleted(tabId, activeTitle);
+      await appendPlaybackDebugLog(tabId, "completion-state-before-mark", {
+        pageActiveTitle: activeTitle,
+        lastCompletedTitle: catalog?.lastCompletedTitle || "",
+        catalogCached: catalog?.cached === true,
+        catalogSize: catalog?.items?.length || 0,
+        activeItems: summarizeActiveCatalogItems(catalog?.items || []),
+        nearbyItems: summarizeCatalogWindow(
+          catalog?.items || [],
+          (catalog?.items || []).findIndex((item) => item.active),
+          3
+        )
+      });
+      const completedItem = await markCachedCatalogActiveItemCompleted(tabId, activeTitle);
       await sendCompletionReminders(tabId, message.pageTitle);
       const settings = await getTabSettings(tabId);
+      await appendPlaybackDebugLog(tabId, "completion-decision", {
+        settings: {
+          enabled: settings.enabled,
+          continuousPlay: settings.continuousPlay,
+          skipWatched: settings.skipWatched,
+          playbackRate: settings.playbackRate
+        },
+        pageActiveTitle: activeTitle,
+        completedItem
+      });
       if (settings.enabled && settings.continuousPlay) {
-        await advanceCatalogPlayback(tabId, settings.skipWatched);
+        await advanceCatalogPlayback(tabId, settings.skipWatched, completedItem);
       }
-    })().catch(() => {
+    })().catch((error) => {
       // A delivery or catalog update failure must not disrupt page monitoring.
+      appendPlaybackDebugLog(tabId, "completion-handler-error", {
+        error: error instanceof Error ? error.message : String(error)
+      }).catch(() => {});
     });
   }
 
@@ -891,4 +1089,5 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(clearSettingsForTopFrame)
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearCachedCatalog(tabId).catch(() => {});
   clearTabSettings(tabId).catch(() => {});
+  clearPlaybackDebugLog(tabId).catch(() => {});
 });
