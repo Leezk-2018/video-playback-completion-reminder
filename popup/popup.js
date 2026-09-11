@@ -20,7 +20,6 @@ const catalogList = document.querySelector("#catalog-list");
 const catalogStatus = document.querySelector("#catalog-status");
 const catalogStats = document.querySelector("#catalog-stats");
 const refreshCatalogButton = document.querySelector("#refresh-catalog");
-const copyDebugLogButton = document.querySelector("#copy-debug-log");
 const authorToggle = document.querySelector("#author-toggle");
 const authorPanel = document.querySelector("#author-panel");
 const copyFeedbackEmailButton = document.querySelector("#copy-feedback-email");
@@ -446,25 +445,6 @@ testQqMailButton.addEventListener("click", async () => {
 renderReminderSettings(DEFAULT_REMINDER_SETTINGS);
 loadStatus().then(loadCatalog);
 refreshCatalogButton.addEventListener("click", () => loadCatalog(true));
-copyDebugLogButton.addEventListener("click", async () => {
-  if (currentTabId === null) return;
-  copyDebugLogButton.disabled = true;
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: "GET_PLAYBACK_DEBUG_LOG",
-      tabId: currentTabId
-    });
-    if (!result?.success) throw new Error(result?.error || "读取日志失败。");
-    await navigator.clipboard.writeText(result.text || "");
-    catalogStatus.textContent = result.text?.includes('"event"')
-      ? "调试日志已复制，请直接发给开发者。"
-      : "暂无完播调试日志，请先复现一次问题。";
-  } catch (error) {
-    catalogStatus.textContent = error instanceof Error ? error.message : "复制日志失败，请重试。";
-  } finally {
-    copyDebugLogButton.disabled = false;
-  }
-});
 authorToggle.addEventListener("click", () => {
   const expanded = authorToggle.getAttribute("aria-expanded") === "true";
   authorToggle.setAttribute("aria-expanded", String(!expanded));

@@ -2,9 +2,6 @@ const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
 const CATALOG_CACHE_KEY_PREFIX = "catalog-cache:";
 const CATALOG_CACHE_VERSION = 3;
-const PLAYBACK_DEBUG_KEY_PREFIX = "playback-debug:";
-const PLAYBACK_DEBUG_EVENT_PREFIX = "PLAYBACK_DEBUG:";
-const PLAYBACK_DEBUG_LIMIT = 200;
 const catalogCache = new Map();
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
@@ -31,83 +28,6 @@ function tabSessionKey(tabId) {
 
 function catalogCacheKey(tabId) {
   return `${CATALOG_CACHE_KEY_PREFIX}${tabId}`;
-}
-
-function playbackDebugKey(tabId) {
-  return `${PLAYBACK_DEBUG_KEY_PREFIX}${tabId}`;
-}
-
-async function appendPlaybackDebugLog(tabId, event, details = {}) {
-  if (!Number.isInteger(tabId)) return;
-  const entry = {
-    time: new Date().toISOString(),
-    event: `${PLAYBACK_DEBUG_EVENT_PREFIX}${event}`,
-    details
-  };
-
-  try {
-    const key = playbackDebugKey(tabId);
-    const stored = await chrome.storage.session.get(key);
-    const entries = Array.isArray(stored[key]) ? stored[key] : [];
-    entries.push(entry);
-    await chrome.storage.session.set({ [key]: entries.slice(-PLAYBACK_DEBUG_LIMIT) });
-  } catch {
-    // Diagnostics must never interrupt completion or continuous playback.
-  }
-}
-
-async function getPlaybackDebugLog(tabId) {
-  const key = playbackDebugKey(tabId);
-  const stored = await chrome.storage.session.get(key);
-  const entries = Array.isArray(stored[key]) ? stored[key] : [];
-  return {
-    success: true,
-    text: JSON.stringify({
-      generatedAt: new Date().toISOString(),
-      tabId,
-      entries
-    }, null, 2)
-  };
-}
-
-async function clearPlaybackDebugLog(tabId) {
-  await chrome.storage.session.remove(playbackDebugKey(tabId));
-}
-
-function summarizeCatalog(items = [], startOrder = 1) {
-  return items.map((item, index) => ({
-    order: startOrder + index,
-    title: item.title,
-    path: item.path || [],
-    status: item.status || "",
-    active: item.active === true,
-    completed: item.completed === true,
-    frameId: item.frameId
-  }));
-}
-
-function summarizeCatalogWindow(items = [], centerIndex = -1, radius = 2) {
-  if (!items.length) return [];
-  const safeCenter = centerIndex >= 0 ? centerIndex : 0;
-  const start = Math.max(0, safeCenter - radius);
-  const end = Math.min(items.length, safeCenter + radius + 1);
-  return summarizeCatalog(items.slice(start, end), start + 1);
-}
-
-function summarizeActiveCatalogItems(items = []) {
-  return items.flatMap((item, index) =>
-    item.active ? summarizeCatalog([item], index + 1) : []
-  );
-}
-
-function sanitizeDebugUrl(value) {
-  if (typeof value === "string" && value.startsWith("blob:")) return "blob:[redacted]";
-  try {
-    const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return typeof value === "string" && value.startsWith("blob:") ? "blob:[redacted]" : "";
-  }
 }
 
 async function getCachedCatalog(tabId) {
@@ -735,14 +655,12 @@ async function startMonitoringPlayback(tabId) {
 const catalogAdvanceLocks = new Map();
 async function advanceCatalogPlayback(tabId, skipWatched, completedItem = null) {
   if (catalogAdvanceLocks.get(tabId)) {
-    await appendPlaybackDebugLog(tabId, "advance-skipped-locked");
     return { success: false, locked: true };
   }
   catalogAdvanceLocks.set(tabId, true);
   try {
     const cached = await getCachedCatalog(tabId);
     if (!cached?.items?.length) {
-      await appendPlaybackDebugLog(tabId, "advance-no-catalog");
       return { success: false };
     }
 
@@ -750,11 +668,6 @@ async function advanceCatalogPlayback(tabId, skipWatched, completedItem = null) 
       ? completedItem.catalogIndex
       : cached.items.findIndex((item) => item.active);
     if (currentIndex < 0) {
-      await appendPlaybackDebugLog(tabId, "advance-current-item-not-found", {
-        completedItem,
-        catalogSize: cached.items.length,
-        activeItems: summarizeActiveCatalogItems(cached.items)
-      });
       return { success: false };
     }
 
@@ -762,43 +675,11 @@ async function advanceCatalogPlayback(tabId, skipWatched, completedItem = null) 
     const nextItem = candidates.find((item) =>
       skipWatched !== true || item.completed !== true
     );
-    const selectedIndex = nextItem ? cached.items.indexOf(nextItem) : -1;
-    const selectedOrder = selectedIndex >= 0 ? selectedIndex + 1 : null;
-    await appendPlaybackDebugLog(tabId, "advance-decision", {
-      skipWatched: skipWatched === true,
-      completedItem,
-      currentOrder: currentIndex + 1,
-      catalogSize: cached.items.length,
-      candidateCount: candidates.length,
-      nearbyItems: summarizeCatalogWindow(cached.items, currentIndex, 3),
-      selectedOrder,
-      selectedItem: nextItem ? summarizeCatalog([nextItem], selectedOrder)[0] : null
-    });
     if (!nextItem) return { success: false, done: true };
 
     const result = await playCatalogItem(tabId, nextItem);
-    await appendPlaybackDebugLog(tabId, "advance-play-result", {
-      requestedOrder: selectedOrder,
-      requestedItem: summarizeCatalog([nextItem], selectedOrder)[0],
-      result
-    });
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    const finalActiveTitle = await getActiveCatalogTitle(tabId);
-    const finalCatalog = await getCachedCatalog(tabId);
-    const finalActiveIndex = finalCatalog?.items?.findIndex((item) => item.active) ?? -1;
-    await appendPlaybackDebugLog(tabId, "advance-final-state", {
-      requestedOrder: selectedOrder,
-      requestedTitle: nextItem.title,
-      pageActiveTitle: finalActiveTitle,
-      cachedActiveOrder: finalActiveIndex >= 0 ? finalActiveIndex + 1 : null,
-      cachedActiveTitle: finalActiveIndex >= 0 ? finalCatalog.items[finalActiveIndex].title : "",
-      pageMatchesRequested: finalActiveTitle === nextItem.title
-    });
     return result;
   } catch (error) {
-    await appendPlaybackDebugLog(tabId, "advance-error", {
-      error: error instanceof Error ? error.message : String(error)
-    });
     throw error;
   } finally {
     setTimeout(() => catalogAdvanceLocks.delete(tabId), 1200);
@@ -965,10 +846,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return respond(getPageCatalog(message.tabId, message.forceRefresh === true), sendResponse);
   }
 
-  if (message.type === "GET_PLAYBACK_DEBUG_LOG") {
-    return respond(getPlaybackDebugLog(message.tabId), sendResponse);
-  }
-
   if (message.type === "PLAY_CATALOG_ITEM") {
     return respond(playCatalogItem(message.tabId, message.item), sendResponse);
   }
@@ -1022,53 +899,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "VIDEO_ENDED" && sender.tab?.id !== undefined) {
     const tabId = sender.tab.id;
     (async () => {
-      await appendPlaybackDebugLog(tabId, "video-ended-received", {
-        pageTitle: message.pageTitle || "",
-        senderFrameId: sender.frameId,
-        senderUrl: sanitizeDebugUrl(sender.url || ""),
-        video: message.video ? {
-          ...message.video,
-          currentSrc: sanitizeDebugUrl(message.video.currentSrc),
-          frameUrl: sanitizeDebugUrl(message.video.frameUrl)
-        } : null
-      });
       // The popup cache may not have seen the latest active marker. Resolve it
       // from the page before composing mail statistics, then update the cache.
       const catalog = await getPageCatalog(tabId).catch(() => null);
       const activeTitle = await getActiveCatalogTitle(tabId);
-      await appendPlaybackDebugLog(tabId, "completion-state-before-mark", {
-        pageActiveTitle: activeTitle,
-        lastCompletedTitle: catalog?.lastCompletedTitle || "",
-        catalogCached: catalog?.cached === true,
-        catalogSize: catalog?.items?.length || 0,
-        activeItems: summarizeActiveCatalogItems(catalog?.items || []),
-        nearbyItems: summarizeCatalogWindow(
-          catalog?.items || [],
-          (catalog?.items || []).findIndex((item) => item.active),
-          3
-        )
-      });
       const completedItem = await markCachedCatalogActiveItemCompleted(tabId, activeTitle);
       await sendCompletionReminders(tabId, message.pageTitle);
       const settings = await getTabSettings(tabId);
-      await appendPlaybackDebugLog(tabId, "completion-decision", {
-        settings: {
-          enabled: settings.enabled,
-          continuousPlay: settings.continuousPlay,
-          skipWatched: settings.skipWatched,
-          playbackRate: settings.playbackRate
-        },
-        pageActiveTitle: activeTitle,
-        completedItem
-      });
       if (settings.enabled && settings.continuousPlay) {
         await advanceCatalogPlayback(tabId, settings.skipWatched, completedItem);
       }
     })().catch((error) => {
       // A delivery or catalog update failure must not disrupt page monitoring.
-      appendPlaybackDebugLog(tabId, "completion-handler-error", {
-        error: error instanceof Error ? error.message : String(error)
-      }).catch(() => {});
     });
   }
 
@@ -1089,5 +931,4 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(clearSettingsForTopFrame)
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearCachedCatalog(tabId).catch(() => {});
   clearTabSettings(tabId).catch(() => {});
-  clearPlaybackDebugLog(tabId).catch(() => {});
 });
