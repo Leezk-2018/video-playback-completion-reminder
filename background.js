@@ -1,7 +1,7 @@
 const TAB_SESSION_KEY_PREFIX = "tab-settings:";
 const REMINDER_SETTINGS_KEY = "reminder-settings";
 const CATALOG_CACHE_KEY_PREFIX = "catalog-cache:";
-const CATALOG_CACHE_VERSION = 3;
+const CATALOG_CACHE_VERSION = 4;
 const catalogCache = new Map();
 const NOTIFICATION_ICON = "icons/icon128.png";
 const QQ_MAIL_BRIDGE_URL = "http://127.0.0.1:8787/send";
@@ -52,10 +52,15 @@ async function clearCachedCatalog(tabId) {
   await chrome.storage.session.remove(catalogCacheKey(tabId));
 }
 
+// 与 manifest.json 的 host_permissions / content_scripts.matches 保持一致，
+// 仅支持国家中小学智慧教育平台的教师培训课程页。
 function isSupportedUrl(url) {
   try {
-    const protocol = new URL(url).protocol;
-    return protocol === "http:" || protocol === "https:";
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "basic.smartedu.cn") {
+      return false;
+    }
+    return parsed.pathname === "/teacherTraining" || parsed.pathname.startsWith("/teacherTraining/");
   } catch {
     return false;
   }
@@ -111,13 +116,8 @@ async function getTabSettings(tabId) {
   }
 
   const key = tabSessionKey(tabId);
-  const [savedState, reminderSettings] = await Promise.all([
-    chrome.storage.session.get(key),
-    getReminderSettings()
-  ]);
-  return {
-    ...normalizeTabSettings(savedState[key])
-  };
+  const savedState = await chrome.storage.session.get(key);
+  return normalizeTabSettings(savedState[key]);
 }
 
 async function saveTabSettings(tabId, settings) {
@@ -185,10 +185,11 @@ async function getTabStatus(tabId) {
       reminderSettings
     };
   } catch {
+    // 标签页可能已被关闭，此时兜底返回默认设置；读取失败也不应阻塞面板渲染。
     return {
       ...DEFAULT_TAB_SETTINGS,
       supported: false,
-      reminderSettings: await getReminderSettings()
+      reminderSettings: await getReminderSettings().catch(() => withReminderMetadata(DEFAULT_REMINDER_SETTINGS))
     };
   }
 }
@@ -212,13 +213,11 @@ async function extractCatalogFromDocument() {
     // 该站点按层级懒渲染课时。逐层展开可以让尚未挂载的 resource-item
     // 出现在 DOM；读取完成后会恢复用户原先的折叠状态。
     const collapsedHeadersToRestore = new Set();
-    let expandedCount = 0;
     for (let level = 0; level < 12; level += 1) {
       const collapsedHeaders = [...exactCatalogRoot.querySelectorAll('.fish-collapse-header[aria-expanded="false"]')];
       if (!collapsedHeaders.length) break;
       collapsedHeaders.forEach((header) => collapsedHeadersToRestore.add(header));
       collapsedHeaders.forEach((header) => header.click());
-      expandedCount += collapsedHeaders.length;
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
 
@@ -243,21 +242,11 @@ async function extractCatalogFromDocument() {
         source: "smartedu-resource-item"
       };
     }).filter(({ title }) => title);
-    const debug = {
-      strategy: "smartedu-resource-item",
-      url: location.href,
-      title: document.title,
-      root: describe(exactCatalogRoot),
-      initiallyCollapsedCount: collapsedHeadersToRestore.size,
-      expandedCount,
-      itemCount: items.length,
-      sample: items.slice(0, 10)
-    };
     // 反向恢复：先收子级，再收父级，避免关闭父级时销毁仍待恢复的子节点。
     [...collapsedHeadersToRestore].reverse().forEach((header) => {
       if (header.isConnected && header.getAttribute("aria-expanded") === "true") header.click();
     });
-    return { items, debug };
+    return { items };
   }
 
   const candidates = [...document.querySelectorAll("[id], [class], [role='tree'], [role='list'], nav, aside")]
@@ -304,26 +293,18 @@ async function extractCatalogFromDocument() {
     if (rows.length >= 100) break;
   }
 
-  const debug = {
-    url: location.href,
-    title: document.title,
-    candidateCount: candidates.length,
-    candidates: candidates.map(({ element, score }) => ({ selector: describe(element), score })),
-    itemCount: rows.length,
-    sample: rows.slice(0, 10)
-  };
-  return { items: rows, debug };
+  return { items: rows };
 }
 
 async function getPageCatalog(tabId, forceRefresh = false) {
   const tab = await chrome.tabs.get(tabId);
   if (!isSupportedUrl(tab.url)) {
-    return { success: false, error: "此页面不支持读取目录。", items: [] };
+    return { success: false, error: "当前页面不是支持的课程页。", items: [] };
   }
 
   const cached = await getCachedCatalog(tabId);
   if (!forceRefresh && cached?.url === tab.url && cached.version === CATALOG_CACHE_VERSION) {
-    return { success: true, items: cached.items, frames: cached.frames, lastCompletedTitle: cached.lastCompletedTitle || "", cached: true };
+    return { success: true, items: cached.items, lastCompletedTitle: cached.lastCompletedTitle || "", cached: true };
   }
 
   const results = await chrome.scripting.executeScript({
@@ -332,10 +313,8 @@ async function getPageCatalog(tabId, forceRefresh = false) {
   });
   const seen = new Set();
   const items = [];
-  const frames = [];
   for (const entry of results) {
-    const result = entry.result || { items: [], debug: {} };
-    frames.push({ frameId: entry.frameId, ...result.debug });
+    const result = entry.result || { items: [] };
     for (const item of result.items || []) {
       const key = `${item.title}|${item.url}`;
       if (!seen.has(key)) {
@@ -344,12 +323,11 @@ async function getPageCatalog(tabId, forceRefresh = false) {
       }
     }
   }
-  const result = { success: true, items, frames, cached: false };
+  const result = { success: true, items, cached: false };
   await saveCachedCatalog(tabId, {
     version: CATALOG_CACHE_VERSION,
     url: tab.url,
     items,
-    frames,
     lastCompletedTitle: ""
   });
   return result;
@@ -525,11 +503,7 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
       success: false,
       reason: "catalog-item-not-found",
       requestedTitle: title,
-      requestedPath: path || [],
-      resourceCount: resources.length,
-      resourceTitles: resources.map((resource) =>
-        normalizeText(resource.querySelector(":scope > div:first-child")?.textContent)
-      )
+      resourceCount: resources.length
     };
   }
   target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -559,17 +533,12 @@ async function clickCatalogItemInDocument({ title, path } = {}) {
 
 async function playCatalogItem(tabId, item) {
   const tab = await chrome.tabs.get(tabId);
-  if (!isSupportedUrl(tab.url)) return { success: false, error: "此页面不支持播放目录视频。" };
-  const attempts = [];
+  if (!isSupportedUrl(tab.url)) return { success: false, error: "当前页面不是支持的课程页。" };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       func: clickCatalogItemInDocument,
       args: [item]
-    });
-    attempts.push({
-      attempt,
-      frameResults: results.map((entry) => ({ frameId: entry.frameId, result: entry.result || null }))
     });
     const result = results.find((entry) => entry.result?.success)?.result;
     if (result?.success) {
@@ -580,8 +549,7 @@ async function playCatalogItem(tabId, item) {
   }
   return {
     success: false,
-    error: "未找到对应的视频目录项。",
-    attempts
+    error: "未找到该课时，请点击「解析」后重试。"
   };
 }
 
@@ -695,7 +663,7 @@ async function updateCurrentTabSettings(tabId, changes) {
       ...DEFAULT_TAB_SETTINGS,
       supported: false,
       reminderSettings: currentStatus.reminderSettings,
-      error: "此页面不支持视频控制。"
+      error: "当前页面不是支持的课程页。"
     };
   }
 
@@ -739,9 +707,9 @@ async function showSystemNotification(tabId) {
   });
 }
 
-async function requestQqMailDelivery({ subject, text }) {
-  const settings = await getReminderSettings();
-  if (!isQqMailConfigured(settings)) {
+async function requestQqMailDelivery({ subject, text }, settings) {
+  const reminderSettings = settings || await getReminderSettings();
+  if (!isQqMailConfigured(reminderSettings)) {
     throw new Error("请先保存 QQ 邮箱设置。");
   }
 
@@ -751,10 +719,10 @@ async function requestQqMailDelivery({ subject, text }) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Video-Reminder-Token": settings.qqMail.bridgeToken
+        "X-Video-Reminder-Token": reminderSettings.qqMail.bridgeToken
       },
       body: JSON.stringify({
-        to: settings.qqMail.recipient,
+        to: reminderSettings.qqMail.recipient,
         subject,
         text
       })
@@ -769,7 +737,7 @@ async function requestQqMailDelivery({ subject, text }) {
   }
 }
 
-async function sendQqMailReminder(tabId, pageTitle) {
+async function sendQqMailReminder(tabId, pageTitle, reminderSettings) {
   const tab = await chrome.tabs.get(tabId);
   const catalog = await getPageCatalog(tabId).catch(() => ({ items: [] }));
   const items = catalog.items || [];
@@ -789,7 +757,7 @@ async function sendQqMailReminder(tabId, pageTitle) {
   await requestQqMailDelivery({
     subject: "视频播放完成",
     text: `视频播放完成。${catalogStats}\n\n页面：${title}\n链接：${pageUrl}\n完成时间：${completedAt}`
-  });
+  }, reminderSettings);
 }
 
 async function sendTestQqMail() {
@@ -800,20 +768,18 @@ async function sendTestQqMail() {
   return { success: true };
 }
 
-async function sendCompletionReminders(tabId, pageTitle) {
-  const tabSettings = await getTabSettings(tabId);
+async function sendCompletionReminders(tabId, pageTitle, tabSettings, reminderSettings) {
   if (!tabSettings.enabled) {
     return;
   }
 
-  const reminderSettings = await getReminderSettings();
   const actions = [];
 
   if (reminderSettings.mode === "system" || reminderSettings.mode === "both") {
     actions.push(showSystemNotification(tabId));
   }
   if (reminderSettings.mode === "qqmail" || reminderSettings.mode === "both") {
-    actions.push(sendQqMailReminder(tabId, pageTitle));
+    actions.push(sendQqMailReminder(tabId, pageTitle, reminderSettings));
   }
 
   await Promise.allSettled(actions);
@@ -899,15 +865,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "VIDEO_ENDED" && sender.tab?.id !== undefined) {
     const tabId = sender.tab.id;
     (async () => {
+      // 一次读取会话与提醒设置，供提醒分发和连续播放共用，避免重复的存储往返。
+      const [tabSettings, reminderSettings] = await Promise.all([
+        getTabSettings(tabId),
+        getReminderSettings()
+      ]);
+      if (!tabSettings.enabled) {
+        return;
+      }
       // The popup cache may not have seen the latest active marker. Resolve it
       // from the page before composing mail statistics, then update the cache.
-      const catalog = await getPageCatalog(tabId).catch(() => null);
+      await getPageCatalog(tabId).catch(() => null);
       const activeTitle = await getActiveCatalogTitle(tabId);
       const completedItem = await markCachedCatalogActiveItemCompleted(tabId, activeTitle);
-      await sendCompletionReminders(tabId, message.pageTitle);
-      const settings = await getTabSettings(tabId);
-      if (settings.enabled && settings.continuousPlay) {
-        await advanceCatalogPlayback(tabId, settings.skipWatched, completedItem);
+      await sendCompletionReminders(tabId, message.pageTitle, tabSettings, reminderSettings);
+      if (tabSettings.continuousPlay) {
+        await advanceCatalogPlayback(tabId, tabSettings.skipWatched, completedItem);
       }
     })().catch((error) => {
       // A delivery or catalog update failure must not disrupt page monitoring.

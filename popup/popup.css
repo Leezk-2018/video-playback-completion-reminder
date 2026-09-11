@@ -211,9 +211,11 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   line-height: 16px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* 通用卡片容器 */

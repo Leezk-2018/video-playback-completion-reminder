@@ -129,8 +129,8 @@ function setStatus(status, detail) {
   if (!isSupported) {
     headerBadge.textContent = "不可用";
     headerBadge.className = "header-badge unsupported";
-    statusText.textContent = "此页面不支持控制";
-    detailText.textContent = detail || "请在包含 HTML5 视频的普通网页中打开。";
+    statusText.textContent = "仅支持智慧教育平台课程页";
+    detailText.textContent = detail || "请在 basic.smartedu.cn 教师培训课程页使用。";
     toggleButton.textContent = "无法监测";
     toggleButton.disabled = true;
     toggleButton.classList.remove("stop");
@@ -186,7 +186,7 @@ function renderCatalog(items, message) {
   if (!items?.length) {
     catalogList.hidden = true;
     catalogStats.hidden = true;
-    catalogStatus.textContent = message || "未识别到目录；请抓取调试日志以便适配页面。";
+    catalogStatus.textContent = message || "未识别到目录。";
     return;
   }
 
