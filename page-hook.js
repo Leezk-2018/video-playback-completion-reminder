@@ -3,6 +3,9 @@
   if (globalThis[HOOK_KEY]) return;
   globalThis[HOOK_KEY] = true;
 
+  // 顶层页面已由 manifest 的 content_scripts.matches 限定为
+  // https://basic.smartedu.cn/teacherTraining*。此处的自检用于覆盖
+  // all_frames 注入进来的播放器 iframe —— 它们可能位于 smartedu.cn 的其它子域。
   const isSmartEdu = /(^|\.)smartedu\.cn$/i.test(location.hostname);
   if (!isSmartEdu) return;
 
