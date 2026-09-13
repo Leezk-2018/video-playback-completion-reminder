@@ -7,7 +7,6 @@ const toggleButton = document.querySelector("#toggle-button");
 const playbackRateSelect = document.querySelector("#playback-rate");
 const systemReminderToggle = document.querySelector("#system-reminder-toggle");
 const mailReminderToggle = document.querySelector("#mail-reminder-toggle");
-const continuousPlayToggle = document.querySelector("#continuous-play-toggle");
 const skipWatchedToggle = document.querySelector("#skip-watched-toggle");
 const qqMailSettings = document.querySelector("#qq-mail-settings");
 const qqRecipientInput = document.querySelector("#qq-recipient");
@@ -75,7 +74,6 @@ function renderReminderSettings(settings, message) {
 
   systemReminderToggle.checked = currentReminderSettings.mode === "system" || currentReminderSettings.mode === "both";
   mailReminderToggle.checked = currentReminderSettings.mode === "qqmail" || currentReminderSettings.mode === "both";
-  continuousPlayToggle.checked = currentStatus.continuousPlay === true;
   skipWatchedToggle.checked = currentStatus.skipWatched === true;
 
   // 保护正在输入的字段，避免被周期性状态刷新覆盖
@@ -109,7 +107,6 @@ function setStatus(status, detail) {
   const isSupported = Boolean(currentStatus.supported);
   const isEnabled = Boolean(currentStatus.enabled);
   const currentRate = Number(currentStatus.playbackRate || 1);
-  continuousPlayToggle.checked = currentStatus.continuousPlay === true;
   skipWatchedToggle.checked = currentStatus.skipWatched === true;
 
   statusDot.classList.toggle("active", isEnabled);
@@ -119,7 +116,6 @@ function setStatus(status, detail) {
 
   playbackRateSelect.value = String(currentRate);
   playbackRateSelect.disabled = !isSupported;
-  continuousPlayToggle.disabled = !isSupported;
   skipWatchedToggle.disabled = !isSupported;
 
   if (status.reminderSettings) {
@@ -148,9 +144,9 @@ function setStatus(status, detail) {
   } else {
     headerBadge.textContent = "待命";
     headerBadge.className = "header-badge";
-    statusText.textContent = "尚未开始监测";
-    detailText.textContent = detail || "点击下方按钮开始监测播放状态。";
-    toggleButton.textContent = "开始监测";
+    statusText.textContent = "尚未开始学习";
+    detailText.textContent = detail || "点击下方按钮开始学习当前课程。";
+    toggleButton.textContent = "开始学习";
     toggleButton.disabled = false;
     toggleButton.classList.remove("stop");
   }
@@ -377,26 +373,21 @@ systemReminderToggle.addEventListener("change", handleReminderModeChange);
 mailReminderToggle.addEventListener("change", handleReminderModeChange);
 
 async function saveCatalogOptions() {
-  continuousPlayToggle.disabled = true;
   skipWatchedToggle.disabled = true;
   try {
     const status = await chrome.runtime.sendMessage({
       type: "SET_CATALOG_OPTIONS",
       tabId: currentTabId,
-      continuousPlay: continuousPlayToggle.checked,
       skipWatched: skipWatchedToggle.checked
     });
     setStatus(status || currentStatus, status?.error);
   } catch {
     catalogStatus.textContent = "目录播放设置保存失败，请重试。";
   } finally {
-    const enabled = Boolean(currentStatus.supported);
-    continuousPlayToggle.disabled = !enabled;
-    skipWatchedToggle.disabled = !enabled;
+    skipWatchedToggle.disabled = !Boolean(currentStatus.supported);
   }
 }
 
-continuousPlayToggle.addEventListener("change", saveCatalogOptions);
 skipWatchedToggle.addEventListener("change", saveCatalogOptions);
 
 // 保存设置按钮

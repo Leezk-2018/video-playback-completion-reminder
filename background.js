@@ -78,7 +78,8 @@ function normalizeTabSettings(value) {
   return {
     enabled: value?.enabled === true,
     playbackRate: normalizePlaybackRate(value?.playbackRate),
-    continuousPlay: value?.continuousPlay !== false,
+    // 连续播放已固定开启：监测期间视频结束后始终自动切换下一个课时。
+    continuousPlay: true,
     skipWatched: value?.skipWatched !== false
   };
 }
@@ -123,12 +124,6 @@ async function getTabSettings(tabId) {
 async function saveTabSettings(tabId, settings) {
   const normalized = normalizeTabSettings(settings);
   const key = tabSessionKey(tabId);
-
-  if (!normalized.enabled && normalized.playbackRate === 1 && !normalized.continuousPlay && !normalized.skipWatched) {
-    await chrome.storage.session.remove(key);
-    return normalized;
-  }
-
   await chrome.storage.session.set({ [key]: normalized });
   return normalized;
 }
@@ -606,7 +601,7 @@ async function startMonitoringPlayback(tabId) {
     const catalog = await getPageCatalog(tabId, true);
     const firstUnwatchedItem = catalog.items?.find((item) => item.completed !== true);
     if (!firstUnwatchedItem) {
-      return { ...status, playbackStart: "当前目录没有待播放视频，已继续播放当前页视频。" };
+      return resumeCurrentPage(tabId, status, "当前目录没有待播放视频，");
     }
 
     const result = await playCatalogItem(tabId, firstUnwatchedItem);
@@ -614,10 +609,22 @@ async function startMonitoringPlayback(tabId) {
       return { ...status, playbackStart: `已开始播放：${firstUnwatchedItem.title}` };
     }
 
-    return { ...status, playbackStart: "未能切换目录视频，已继续播放当前页视频。" };
+    return resumeCurrentPage(tabId, status, "未能切换目录视频，");
   } catch {
-    return { ...status, playbackStart: "目录读取失败，已继续播放当前页视频。" };
+    return resumeCurrentPage(tabId, status, "目录读取失败，");
   }
+}
+
+// Fallbacks after a failed catalog jump still owe the user playback: the
+// content script's async resume alone leaves a window where nothing plays.
+async function resumeCurrentPage(tabId, status, reason) {
+  const playback = await playCurrentPageVideos(tabId).catch(() => ({ success: false }));
+  return {
+    ...status,
+    playbackStart: playback.success
+      ? `${reason}已开始播放当前页视频。`
+      : `${reason}未能自动播放当前页视频，请手动点击播放。`
+  };
 }
 
 const catalogAdvanceLocks = new Map();
@@ -841,7 +848,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SET_CATALOG_OPTIONS") {
     return respond(
       updateCurrentTabSettings(message.tabId, {
-        continuousPlay: message.continuousPlay === true,
         skipWatched: message.skipWatched === true
       }),
       sendResponse
